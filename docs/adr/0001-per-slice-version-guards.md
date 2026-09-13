@@ -33,8 +33,11 @@ don't want every crossing declared. There is no "acknowledge everything on
 this table" form of the attribute — that blunt waiver would also swallow
 guards added to the table later.
 
-Same-row dirty slices in one flush combine into a single UPDATE, deduping
-shared version columns so they bump and check once.
+A `#[Version]`-checking slice is never combined into a table-scoped merge
+UPDATE: its `WHERE version = ?` check and `rowCount()`-based conflict
+detection must run on its own entity-bound statement, so two versioned
+slices dirty on the same row in one flush emit one UPDATE each. Only
+non-versioned slices remain combinable.
 
 `#[Version]` implies `#[Property]`.
 

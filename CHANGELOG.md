@@ -46,12 +46,16 @@ See `docs/adr/0001-per-slice-version-guards.md`.
 
 - `EntityMetadata::getGuardSet()` and `EntityMetadata::getAcknowledgedVersionColumns()` —
   validate-time helpers; no runtime path reads them.
+- `ManagedVersionColumnException` — thrown at flush time when a `#[Version]` column is
+  assigned manually. The column is ORM-managed (server-side `col = col + 1` bump, checked
+  in `WHERE` against the tracked value), so a hand-written value is rejected rather than
+  silently dropped.
 
 ### Fixed
 
-- `QueryExecutor` no longer emits a bound `col = ?` assignment for a `#[Version]` column
-  that also appears in the change set; the server-side `col = col + 1` bump is authoritative.
-  This avoids a duplicate SET-target error on PostgreSQL.
+- Manual assignment to a `#[Version]` column no longer silently desyncs the lock check or
+  duplicates the SET target (a hard error on PostgreSQL): `QueryExecutor` now throws
+  `ManagedVersionColumnException` when a version column appears in the change set.
 
 ### Migrating from 1.x
 

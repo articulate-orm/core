@@ -10,6 +10,7 @@ use Articulate\Attributes\SoftDeleteable;
 use Articulate\Attributes\Version;
 use Articulate\Attributes\VersionAware;
 use Articulate\Connection;
+use Articulate\Exceptions\ManagedVersionColumnException;
 use Articulate\Exceptions\OptimisticLockException;
 use Articulate\Modules\EntityManager\EntityManager;
 use Articulate\Tests\DatabaseTestCase;
@@ -232,7 +233,7 @@ class OptimisticLockingTest extends DatabaseTestCase {
     }
 
     #[DataProvider('databaseProvider')]
-    public function testManualVersionPropertyMutationDoesNotEmitDuplicateSetTarget(string $databaseName): void
+    public function testManualVersionColumnAssignmentIsRejected(string $databaseName): void
     {
         $connection = $this->getConnection($databaseName);
         $this->setCurrentDatabase($connection, $databaseName);
@@ -245,18 +246,15 @@ class OptimisticLockingTest extends DatabaseTestCase {
         $em->persist($account);
         $em->flush();
 
-        // Hand-writing the ORM-managed #[Version] property alongside a real change must
-        // not emit a bound "version = ?" assignment next to the server-side
-        // "version = version + 1" bump: a duplicate SET target is a hard error on
-        // PostgreSQL and a silent double-apply on MySQL. The mutation is ignored for the
-        // SET clause; because the stale hand-written value no longer matches the row it
-        // surfaces as a normal OptimisticLockException on both databases rather than a
-        // driver-specific failure.
+        // The #[Version] column is ORM-managed (bumped server-side "version = version + 1",
+        // checked in WHERE against the tracked value). A hand-written value would desync that
+        // check and duplicate the SET target (a hard error on PostgreSQL). Articulate rejects
+        // the manual assignment at flush time on both databases rather than silently dropping it.
         $account->name = 'Alice Updated';
         $account->version = 999;
         $em->persist($account);
 
-        $this->expectException(OptimisticLockException::class);
+        $this->expectException(ManagedVersionColumnException::class);
         $em->flush();
     }
 

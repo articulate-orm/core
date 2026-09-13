@@ -9,6 +9,7 @@ use Articulate\Attributes\Reflection\ReflectionProperty;
 use Articulate\Attributes\Relations\MorphTypeRegistry;
 use Articulate\Collection\MappingCollection;
 use Articulate\Connection;
+use Articulate\Exceptions\ManagedVersionColumnException;
 use Articulate\Exceptions\OptimisticLockException;
 use Articulate\Modules\Generators\GeneratorRegistry;
 use Articulate\Schema\EntityMetadata;
@@ -183,11 +184,13 @@ class QueryExecutor {
         $versionColumns = $metadata->getVersionColumns();
 
         foreach ($changes as $columnName => $newValue) {
-            // The #[Version] column is ORM-managed: the server-side "col = col + 1" bump
-            // appended below is authoritative. Emitting a bound "col = ?" assignment here
-            // as well would duplicate the SET target (a hard error on PostgreSQL).
+            // The #[Version] column is ORM-managed: it is bumped server-side ("col = col + 1",
+            // appended below) and checked in the WHERE clause against the tracked value. The ORM
+            // never marks it dirty itself, so its presence here is a manual assignment — which
+            // would desync the lock check (and duplicate the SET target, a hard error on
+            // PostgreSQL). Reject it rather than silently dropping it.
             if (in_array($columnName, $versionColumns, true)) {
-                continue;
+                throw ManagedVersionColumnException::forColumn($entity::class, $columnName);
             }
 
             // Find the property metadata by column name (changes are keyed by column name)

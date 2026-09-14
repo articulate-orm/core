@@ -6,6 +6,7 @@ use Articulate\Attributes\Reflection\ReflectionEntity;
 use Articulate\Attributes\Reflection\ReflectionProperty;
 use Articulate\Exceptions\CursorPaginationException;
 use Articulate\Schema\EntityMetadataRegistry;
+use InvalidArgumentException;
 
 class CursorPaginationHandler {
     public function __construct(
@@ -58,42 +59,96 @@ class CursorPaginationHandler {
 
             if (is_object($item)) {
                 if ($entityClass !== null && $this->metadataRegistry !== null) {
+                    // getMetadata() throws InvalidArgumentException when the class is
+                    // not a registered entity — fall through to reflection in that case,
+                    // but let any other failure (e.g. getValue()) surface.
+                    $metadata = null;
+
                     try {
                         $metadata = $this->metadataRegistry->getMetadata($entityClass);
+                    } catch (InvalidArgumentException) {
+                    }
+
+                    if ($metadata !== null) {
                         foreach ($metadata->getProperties() as $property) {
                             if ($property->getColumnName() === $column) {
-                                $values[] = $property->getValue($item);
+                                $values[] = $this->normalizeCursorValue($property->getValue($item));
 
                                 continue 2;
                             }
                         }
-                    } catch (\Exception $e) {
                     }
                 }
 
+                // ReflectionEntity throws when $item::class is not an entity —
+                // fall through to array handling, but do not swallow other errors.
+                $reflectionEntity = null;
+
                 try {
                     $reflectionEntity = new ReflectionEntity($item::class);
+                } catch (InvalidArgumentException) {
+                }
+
+                if ($reflectionEntity !== null) {
                     foreach (iterator_to_array($reflectionEntity->getEntityProperties()) as $property) {
                         if ($property instanceof ReflectionProperty && ($property->getColumnName() === $column || $property->getFieldName() === $column)) {
-                            $values[] = $property->getValue($item);
+                            $values[] = $this->normalizeCursorValue($property->getValue($item));
 
                             continue 2;
                         }
                     }
-                } catch (\Exception $e) {
                 }
             }
 
-            if (is_array($item) && isset($item[$column])) {
-                $values[] = $item[$column];
+            if (is_array($item) && array_key_exists($column, $item)) {
+                $values[] = $this->normalizeCursorValue($item[$column]);
 
                 continue;
             }
 
-            return null;
+            throw new CursorPaginationException(sprintf(
+                'Unable to resolve cursor value for ORDER BY column "%s" on %s. The ordered column must be readable from the result item.',
+                $column,
+                is_object($item) ? $item::class : get_debug_type($item)
+            ));
         }
 
         return $values;
+    }
+
+    /**
+     * Normalize an extracted order-column value to the scalar representation that
+     * is actually stored in the column, so it round-trips through the cursor codec
+     * and binds correctly against `column <op> ?`. Without this, DateTime/enum/value
+     * objects serialize to non-bindable structures and silently break pagination.
+     */
+    private function normalizeCursorValue(mixed $value): mixed
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format('Y-m-d H:i:s');
+        }
+
+        if ($value instanceof \BackedEnum) {
+            return $value->value;
+        }
+
+        if ($value instanceof \UnitEnum) {
+            return $value->name;
+        }
+
+        if (is_scalar($value)) {
+            return $value;
+        }
+
+        throw new CursorPaginationException(sprintf(
+            'ORDER BY column value of type %s cannot be used as a cursor boundary. '
+            . 'Cursor pagination requires scalar, DateTime, or enum order columns.',
+            get_debug_type($value)
+        ));
     }
 
     public function createPaginator(

@@ -8,6 +8,7 @@ use Articulate\Schema\EntityMetadataRegistry;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
@@ -21,6 +22,7 @@ class ValidateCommand extends Command {
         private readonly ?array $entitiesPath = null,
         private readonly EntityClassDiscovery $entityClassDiscovery = new EntityClassDiscovery(),
         private readonly EntityMetadataRegistry $metadataRegistry = new EntityMetadataRegistry(),
+        private readonly bool $lenientVersionChecks = false,
     ) {
         parent::__construct();
     }
@@ -28,6 +30,12 @@ class ValidateCommand extends Command {
     protected function configure(): void
     {
         $this->setDescription('Validate that entity mappings are in sync with the database schema.');
+        $this->addOption(
+            'lenient',
+            null,
+            InputOption::VALUE_NONE,
+            'Downgrade the missing-#[VersionAware]-acknowledgement error to a warning (rival-counters errors are unaffected).'
+        );
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -51,10 +59,17 @@ class ValidateCommand extends Command {
             $io->warning($warning);
         }
 
-        $hasVersionErrors = $this->validateVersionColumns($entityClasses, $io);
+        $lenient = $this->lenientVersionChecks || $input->getOption('lenient');
+        $versionResult = $this->validateVersionColumns($entityClasses, $io, $lenient);
+        $hasVersionErrors = $versionResult['errors'] > 0;
+        $hasVersionWarnings = $versionResult['warnings'] > 0;
 
         if (!$hasDrift && empty($allWarnings) && !$hasVersionErrors) {
-            $io->success('Schema is valid. All entities are in sync with the database.');
+            if ($hasVersionWarnings) {
+                $io->caution('Optimistic-locking acknowledgement warnings found (lenient mode); see above.');
+            } else {
+                $io->success('Schema is valid. All entities are in sync with the database.');
+            }
 
             return Command::SUCCESS;
         }
@@ -66,23 +81,30 @@ class ValidateCommand extends Command {
         }
 
         if ($hasVersionErrors) {
-            $io->error('Optimistic-locking version-column coverage errors found (see above).');
+            $io->error('Optimistic-locking version-guard errors found (see above).');
         }
 
         return Command::FAILURE;
     }
 
     /**
-     * Every entity class mapping a versioned table must account for every #[Version]
-     * column on that table — either as its own #[Version] property or listed in its
-     * own #[VersionAware] — so a write through that class is never invisible to a
-     * checking sibling's lost-update detection.
+     * Per-slice version-guard validation. Group entity classes by table; for
+     * each #[Version] column compute its owning slice's guard set, then:
+     *
+     *  - error when a slice persists a column that is in another slice's guard
+     *    set and the slice has neither its own #[Version] covering that column
+     *    nor a #[VersionAware] naming that version column (downgraded to a
+     *    warning when $lenient is set);
+     *  - error ("rival counters") when two distinct #[Version] columns have
+     *    overlapping guard sets (never downgraded).
      *
      * @param ReflectionEntity[] $entityClasses
+     * @return array{errors: int, warnings: int}
      */
-    private function validateVersionColumns(array $entityClasses, SymfonyStyle $io): bool
+    private function validateVersionColumns(array $entityClasses, SymfonyStyle $io, bool $lenient): array
     {
-        $hasError = false;
+        $errors = 0;
+        $warnings = 0;
         $metadataByTable = [];
 
         foreach ($entityClasses as $reflectionEntity) {
@@ -91,50 +113,75 @@ class ValidateCommand extends Command {
         }
 
         foreach ($metadataByTable as $tableName => $metadataGroup) {
-            $canonicalVersionColumns = $this->metadataRegistry->getVersionColumnsForTable($tableName);
-            $anyVersionColumns = array_merge($canonicalVersionColumns, ...array_map(
-                fn ($metadata) => $metadata->getVersionColumns(),
-                $metadataGroup
-            ));
+            // version column => union of its owning slices' guard sets
+            $guardSets = [];
+            foreach ($metadataGroup as $metadata) {
+                foreach ($metadata->getVersionColumns() as $versionColumn) {
+                    $guardSets[$versionColumn] = array_values(array_unique(array_merge(
+                        $guardSets[$versionColumn] ?? [],
+                        $metadata->getGuardSet(),
+                    )));
+                }
+            }
 
-            if ($anyVersionColumns === []) {
+            if ($guardSets === []) {
                 continue;
             }
 
-            if (count($canonicalVersionColumns) > 1) {
-                $io->info(sprintf(
-                    'Table "%s" has multiple distinct #[Version] columns (%s) across its entity classes.',
-                    $tableName,
-                    implode(', ', $canonicalVersionColumns)
-                ));
+            $versionColumns = array_keys($guardSets);
+            foreach ($versionColumns as $i => $columnA) {
+                foreach (array_slice($versionColumns, $i + 1) as $columnB) {
+                    $overlap = array_values(array_intersect($guardSets[$columnA], $guardSets[$columnB]));
+                    if ($overlap === []) {
+                        continue;
+                    }
+
+                    $errors++;
+                    $io->error(sprintf(
+                        'Rival counters on table "%s": #[Version] columns "%s" and "%s" both guard %s.',
+                        $tableName,
+                        $columnA,
+                        $columnB,
+                        implode(', ', $overlap),
+                    ));
+                }
             }
 
             foreach ($metadataGroup as $metadata) {
-                $classVersionColumns = $metadata->getVersionColumns();
+                $ownVersionColumns = $metadata->getVersionColumns();
+                $acknowledged = $metadata->getAcknowledgedVersionColumns();
 
-                foreach (array_diff($canonicalVersionColumns, $classVersionColumns) as $missingColumn) {
-                    $hasError = true;
-                    $io->error(sprintf(
-                        'Class "%s" does not account for version column "%s" on table "%s".',
-                        $metadata->getClassName(),
-                        $missingColumn,
-                        $tableName
-                    ));
-                }
+                foreach ($guardSets as $versionColumn => $guardedColumns) {
+                    if (in_array($versionColumn, $ownVersionColumns, true)) {
+                        continue;
+                    }
 
-                $ownAwareColumns = array_diff($classVersionColumns, $metadata->getCheckedVersionColumns());
-                foreach (array_diff($ownAwareColumns, $canonicalVersionColumns) as $danglingColumn) {
-                    $hasError = true;
-                    $io->error(sprintf(
-                        'Class "%s" declares #[VersionAware] column "%s" on table "%s" with no canonical #[Version] owner in the group.',
+                    $written = array_values(array_intersect($metadata->getGuardSet(), $guardedColumns));
+                    if ($written === [] || in_array($versionColumn, $acknowledged, true)) {
+                        continue;
+                    }
+
+                    $message = sprintf(
+                        'Class "%s" persists %s guarded by #[Version] column "%s" on table "%s" '
+                        . 'without its own #[Version] or a #[VersionAware([\'%s\'])] acknowledgement.',
                         $metadata->getClassName(),
-                        $danglingColumn,
-                        $tableName
-                    ));
+                        implode(', ', $written),
+                        $versionColumn,
+                        $tableName,
+                        $versionColumn,
+                    );
+
+                    if ($lenient) {
+                        $warnings++;
+                        $io->warning($message);
+                    } else {
+                        $errors++;
+                        $io->error($message);
+                    }
                 }
             }
         }
 
-        return $hasError;
+        return ['errors' => $errors, 'warnings' => $warnings];
     }
 }

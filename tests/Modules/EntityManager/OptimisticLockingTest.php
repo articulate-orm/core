@@ -10,6 +10,7 @@ use Articulate\Attributes\SoftDeleteable;
 use Articulate\Attributes\Version;
 use Articulate\Attributes\VersionAware;
 use Articulate\Connection;
+use Articulate\Exceptions\ManagedVersionColumnException;
 use Articulate\Exceptions\OptimisticLockException;
 use Articulate\Modules\EntityManager\EntityManager;
 use Articulate\Tests\DatabaseTestCase;
@@ -69,19 +70,6 @@ class OptimisticLockPostUpdateAccount {
 }
 
 #[Entity(tableName: 'ol_shared')]
-class OptimisticLockCheckedSiblingTwo {
-    #[PrimaryKey]
-    public ?int $id = null;
-
-    #[Property]
-    public string $title = '';
-
-    #[Property]
-    #[Version]
-    public int $version = 0;
-}
-
-#[Entity(tableName: 'ol_shared')]
 #[VersionAware(['version'])]
 class OptimisticLockAwareSibling {
     #[PrimaryKey]
@@ -101,6 +89,18 @@ class OptimisticLockAwareSiblingTwo {
     public string $note = '';
 }
 
+#[Entity(tableName: 'ol_revisioned')]
+class OptimisticLockRevisionedAccount {
+    #[PrimaryKey]
+    public ?int $id = null;
+
+    #[Property]
+    public string $name = '';
+
+    #[Version(name: 'lock_version')]
+    public int $revisionCount = 0;
+}
+
 #[Entity(tableName: 'ol_soft_delete')]
 #[SoftDeleteable]
 class OptimisticLockSoftDeleteAccount {
@@ -113,6 +113,19 @@ class OptimisticLockSoftDeleteAccount {
     #[Property]
     #[Version]
     public int $version = 0;
+
+    #[Property(nullable: true)]
+    public ?\DateTimeImmutable $deletedAt = null;
+}
+
+#[Entity(tableName: 'ol_soft_delete_cosmetic')]
+#[SoftDeleteable]
+class OptimisticLockCosmeticSoftDeleteAccount {
+    #[PrimaryKey]
+    public ?int $id = null;
+
+    #[Property]
+    public string $name = '';
 
     #[Property(nullable: true)]
     public ?\DateTimeImmutable $deletedAt = null;
@@ -139,6 +152,47 @@ class OptimisticLockingTest extends DatabaseTestCase {
             default => throw new \InvalidArgumentException("Unsupported database: {$databaseName}"),
         };
         $connection->executeQuery($sql);
+    }
+
+    private function createRevisionedTable(Connection $connection, string $databaseName): void
+    {
+        $connection->executeQuery('DROP TABLE IF EXISTS ol_revisioned' . ($databaseName === 'pgsql' ? ' CASCADE' : ''));
+        $sql = match ($databaseName) {
+            'mysql' => 'CREATE TABLE ol_revisioned (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255) NOT NULL, lock_version INT NOT NULL DEFAULT 0)',
+            'pgsql' => 'CREATE TABLE ol_revisioned (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, lock_version INT NOT NULL DEFAULT 0)',
+            default => throw new \InvalidArgumentException("Unsupported database: {$databaseName}"),
+        };
+        $connection->executeQuery($sql);
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testBareVersionWithExplicitColumnNamePersistsAndReads(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+        $this->createRevisionedTable($connection, $databaseName);
+
+        $em = new EntityManager($connection);
+
+        $account = new OptimisticLockRevisionedAccount();
+        $account->name = 'Ada';
+        $em->persist($account);
+        $em->flush();
+
+        $this->assertSame(0, $account->revisionCount);
+
+        $account->name = 'Ada Updated';
+        $em->persist($account);
+        $em->flush();
+
+        $this->assertSame(1, $account->revisionCount);
+
+        $row = $connection->executeQuery('SELECT lock_version FROM ol_revisioned WHERE id = ?', [$account->id])->fetch();
+        $this->assertSame(1, (int) $row['lock_version']);
+
+        $reloaded = (new EntityManager($connection))->find(OptimisticLockRevisionedAccount::class, $account->id);
+        $this->assertNotNull($reloaded);
+        $this->assertSame(1, $reloaded->revisionCount);
     }
 
     private function createSoftDeleteTable(Connection $connection, string $databaseName): void
@@ -176,6 +230,32 @@ class OptimisticLockingTest extends DatabaseTestCase {
 
         $row = $connection->executeQuery('SELECT version FROM ol_accounts WHERE id = ?', [$account->id])->fetch();
         $this->assertSame(1, (int) $row['version']);
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testManualVersionColumnAssignmentIsRejected(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+        $this->createAccountsTable($connection, $databaseName);
+
+        $em = new EntityManager($connection);
+
+        $account = new OptimisticLockAccount();
+        $account->name = 'Alice';
+        $em->persist($account);
+        $em->flush();
+
+        // The #[Version] column is ORM-managed (bumped server-side "version = version + 1",
+        // checked in WHERE against the tracked value). A hand-written value would desync that
+        // check and duplicate the SET target (a hard error on PostgreSQL). Articulate rejects
+        // the manual assignment at flush time on both databases rather than silently dropping it.
+        $account->name = 'Alice Updated';
+        $account->version = 999;
+        $em->persist($account);
+
+        $this->expectException(ManagedVersionColumnException::class);
+        $em->flush();
     }
 
     #[DataProvider('databaseProvider')]
@@ -228,7 +308,7 @@ class OptimisticLockingTest extends DatabaseTestCase {
     }
 
     #[DataProvider('databaseProvider')]
-    public function testVersionAwareSiblingBumpsColumnWithoutCheckingIt(string $databaseName): void
+    public function testCosmeticVersionAwareSliceWriteDoesNotBumpOrBlockCheckedSibling(string $databaseName): void
     {
         $connection = $this->getConnection($databaseName);
         $this->setCurrentDatabase($connection, $databaseName);
@@ -240,6 +320,7 @@ class OptimisticLockingTest extends DatabaseTestCase {
         $checkedEm->persist($checked);
         $checkedEm->flush();
 
+        // Cosmetic write through the #[VersionAware] slice: no version SQL at all.
         $awareEm = new EntityManager($connection);
         $aware = $awareEm->find(OptimisticLockAwareSibling::class, $checked->id);
         $aware->title = 'Changed by aware sibling';
@@ -247,19 +328,45 @@ class OptimisticLockingTest extends DatabaseTestCase {
         $awareEm->flush();
 
         $row = $connection->executeQuery('SELECT version FROM ol_shared WHERE id = ?', [$checked->id])->fetch();
-        $this->assertSame(1, (int) $row['version'], 'VersionAware sibling must bump the shared column');
+        $this->assertSame(0, (int) $row['version'], 'VersionAware slice must not bump the shared version column');
 
-        // The checked sibling still holds the stale in-memory version (0) — its next
-        // flush must now detect the lost update caused by the aware sibling's write.
+        // The checked sibling still tracks version 0 — and the row is still at 0,
+        // so its next flush succeeds: the cosmetic write did not disturb it.
         $checked->status = 'checked writer update';
         $checkedEm->persist($checked);
-
-        $this->expectException(OptimisticLockException::class);
         $checkedEm->flush();
+
+        $this->assertSame(1, $checked->version);
+        $row = $connection->executeQuery('SELECT version, title FROM ol_shared WHERE id = ?', [$checked->id])->fetch();
+        $this->assertSame(1, (int) $row['version']);
+        $this->assertSame('Changed by aware sibling', $row['title']);
     }
 
     #[DataProvider('databaseProvider')]
-    public function testTwoVersionAwareSiblingsCombinedBumpColumnOnceNotTwice(string $databaseName): void
+    public function testStaleVersionedSliceWriteStillThrowsOnASharedRow(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+        $this->createSharedTable($connection, $databaseName);
+
+        $em = new EntityManager($connection);
+        $checked = new OptimisticLockCheckedSibling();
+        $checked->status = 'initial';
+        $em->persist($checked);
+        $em->flush();
+
+        // A concurrent writer bumps the version out of band.
+        $connection->executeQuery('UPDATE ol_shared SET version = version + 1 WHERE id = ?', [$checked->id]);
+
+        $checked->status = 'stale write';
+        $em->persist($checked);
+
+        $this->expectException(OptimisticLockException::class);
+        $em->flush();
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testTwoVersionAwareSiblingsInOneFlushEmitNoVersionSql(string $databaseName): void
     {
         $connection = $this->getConnection($databaseName);
         $this->setCurrentDatabase($connection, $databaseName);
@@ -288,7 +395,41 @@ class OptimisticLockingTest extends DatabaseTestCase {
         $em->flush();
 
         $row = $connection->executeQuery('SELECT version FROM ol_shared WHERE id = ?', [$seed->id])->fetch();
-        $this->assertSame(1, (int) $row['version'], 'Two siblings bumping the same column in one flush must increment it exactly once');
+        $this->assertSame(0, (int) $row['version'], '#[VersionAware] slices bump nothing');
+    }
+
+    private function createCosmeticSoftDeleteTable(Connection $connection, string $databaseName): void
+    {
+        $connection->executeQuery('DROP TABLE IF EXISTS ol_soft_delete_cosmetic' . ($databaseName === 'pgsql' ? ' CASCADE' : ''));
+        $sql = match ($databaseName) {
+            'mysql' => 'CREATE TABLE ol_soft_delete_cosmetic (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255) NOT NULL, deleted_at DATETIME NULL)',
+            'pgsql' => 'CREATE TABLE ol_soft_delete_cosmetic (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, deleted_at TIMESTAMP NULL)',
+            default => throw new \InvalidArgumentException("Unsupported database: {$databaseName}"),
+        };
+        $connection->executeQuery($sql);
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testSoftDeleteThroughNonVersionedSliceIssuesNoVersionSql(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+        // Table has no version column at all: any leaked "version = version + 1"
+        // SET or "version = ?" WHERE would be a SQL error against a missing column.
+        $this->createCosmeticSoftDeleteTable($connection, $databaseName);
+
+        $em = new EntityManager($connection);
+
+        $account = new OptimisticLockCosmeticSoftDeleteAccount();
+        $account->name = 'Frank';
+        $em->persist($account);
+        $em->flush();
+
+        $em->remove($account);
+        $em->flush();
+
+        $row = $connection->executeQuery('SELECT deleted_at FROM ol_soft_delete_cosmetic WHERE id = ?', [$account->id])->fetch();
+        $this->assertNotNull($row['deleted_at']);
     }
 
     #[DataProvider('databaseProvider')]
@@ -405,37 +546,6 @@ class OptimisticLockingTest extends DatabaseTestCase {
         }
 
         $this->assertSame(0, $good->version, 'soft-delete in-memory version must not be bumped by a flush that threw before commit');
-    }
-
-    #[DataProvider('databaseProvider')]
-    public function testTwoCheckingSiblingsWritingSameRowInOneFlushConflictWithThemselves(string $databaseName): void
-    {
-        $connection = $this->getConnection($databaseName);
-        $this->setCurrentDatabase($connection, $databaseName);
-        $this->createSharedTable($connection, $databaseName);
-
-        $em = new EntityManager($connection);
-
-        $a = new OptimisticLockCheckedSibling();
-        $a->status = 'a';
-        $em->persist($a);
-        $em->flush();
-
-        $b = $em->find(OptimisticLockCheckedSiblingTwo::class, $a->id);
-        $this->assertNotNull($b);
-
-        $a->status = 'a-updated';
-        $b->title = 'b-updated';
-        $em->persist($a);
-        $em->persist($b);
-
-        // Same row, two #[Version]-checking classes, one flush. Checking entities are
-        // never merged, so each issues its own UPDATE; the first bumps the shared
-        // version column, so the second's WHERE version = <pre-bump value> matches
-        // nothing. Writing one row through two checking contexts in a single flush is
-        // a self-inflicted lost update and is surfaced, not silently absorbed.
-        $this->expectException(OptimisticLockException::class);
-        $em->flush();
     }
 
     #[DataProvider('databaseProvider')]

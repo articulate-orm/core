@@ -86,24 +86,6 @@ class EntityMetadataRegistry {
     }
 
     /**
-     * Union of the canonical #[Version] columns declared across every class known
-     * to map to the given table. Validate-only helper — QueryExecutor never needs
-     * this table-wide question at flush time, since bump/check is resolved
-     * entirely from the acting entity's own metadata.
-     *
-     * @return list<string>
-     */
-    public function getVersionColumnsForTable(string $tableName): array
-    {
-        $columns = [];
-        foreach ($this->getClassesByTable($tableName) as $entityClass) {
-            $columns = array_merge($columns, $this->getMetadata($entityClass)->getCheckedVersionColumns());
-        }
-
-        return array_values(array_unique($columns));
-    }
-
-    /**
      * Check if metadata exists for an entity class.
      */
     public function hasMetadata(string $entityClass): bool

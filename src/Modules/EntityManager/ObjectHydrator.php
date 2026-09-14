@@ -9,6 +9,7 @@ use Articulate\Attributes\Reflection\ReflectionMorphedByMany;
 use Articulate\Attributes\Reflection\ReflectionMorphToMany;
 use Articulate\Attributes\Reflection\ReflectionProperty as ArticulateReflectionProperty;
 use Articulate\Attributes\Reflection\ReflectionRelation;
+use Articulate\Attributes\Version;
 use Articulate\Collection\MappingCollection;
 use Articulate\Modules\EntityManager\Proxy\ProxyInterface;
 use Articulate\Schema\EntityRegistrarInterface;
@@ -356,12 +357,15 @@ class ObjectHydrator implements HydratorInterface {
             return $columnName;
         }
 
-        // Check for Property attribute mapping
+        // Check for explicit column-name mapping on #[Property] or (implies-#[Property]) #[Version]
         foreach ($reflection->getProperties() as $property) {
-            $attributes = $property->getAttributes(Property::class);
-            foreach ($attributes as $attribute) {
-                $propertyAttr = $attribute->newInstance();
-                if ($propertyAttr->name === $columnName) {
+            foreach ($property->getAttributes(Property::class) as $attribute) {
+                if ($attribute->newInstance()->name === $columnName) {
+                    return $property->getName();
+                }
+            }
+            foreach ($property->getAttributes(Version::class) as $attribute) {
+                if ($attribute->newInstance()->name === $columnName) {
                     return $property->getName();
                 }
             }

@@ -97,7 +97,7 @@ class ChangeSetExecutor {
         $where = $this->queryExecutor->buildEntityWhereClause($entity);
 
         $versionCheckColumns = [];
-        foreach ($metadata->getCheckedVersionColumns() as $checkedColumn) {
+        foreach ($metadata->getVersionColumns() as $checkedColumn) {
             $versionCheckColumns[$checkedColumn] = $this->queryExecutor->getVersionColumnValue($metadata, $entity, $checkedColumn);
         }
 

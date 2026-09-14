@@ -80,7 +80,7 @@ class MergeUpdateConflictResolutionStrategy implements UpdateConflictResolutionS
         // A #[Version]-checking entity's WHERE version = ? check and rowCount()-based
         // conflict detection must run on its own entity-bound UPDATE — combining it
         // into a table-scoped merge would silently drop that guarantee.
-        if ($metadata->getCheckedVersionColumns() !== []) {
+        if ($metadata->getVersionColumns() !== []) {
             return false;
         }
 

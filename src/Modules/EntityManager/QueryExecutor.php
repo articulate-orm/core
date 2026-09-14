@@ -9,6 +9,7 @@ use Articulate\Attributes\Reflection\ReflectionProperty;
 use Articulate\Attributes\Relations\MorphTypeRegistry;
 use Articulate\Collection\MappingCollection;
 use Articulate\Connection;
+use Articulate\Exceptions\ManagedVersionColumnException;
 use Articulate\Exceptions\OptimisticLockException;
 use Articulate\Modules\Generators\GeneratorRegistry;
 use Articulate\Schema\EntityMetadata;
@@ -180,8 +181,18 @@ class QueryExecutor {
         // Prepare SET clause from changes
         $setParts = [];
         $values = [];
+        $versionColumns = $metadata->getVersionColumns();
 
         foreach ($changes as $columnName => $newValue) {
+            // The #[Version] column is ORM-managed: it is bumped server-side ("col = col + 1",
+            // appended below) and checked in the WHERE clause against the tracked value. The ORM
+            // never marks it dirty itself, so its presence here is a manual assignment — which
+            // would desync the lock check (and duplicate the SET target, a hard error on
+            // PostgreSQL). Reject it rather than silently dropping it.
+            if (in_array($columnName, $versionColumns, true)) {
+                throw ManagedVersionColumnException::forColumn($entity::class, $columnName);
+            }
+
             // Find the property metadata by column name (changes are keyed by column name)
             $property = null;
             foreach (iterator_to_array($reflectionEntity->getEntityProperties()) as $prop) {
@@ -211,17 +222,17 @@ class QueryExecutor {
         $this->addManyToOneChanges($entity, $setParts, $values);
 
         // Optimistic-lock bump: server-side increment, no bound parameter needed.
-        foreach ($metadata->getVersionColumns() as $versionColumn) {
+        foreach ($versionColumns as $versionColumn) {
             $setParts[] = "{$versionColumn} = {$versionColumn} + 1";
         }
 
         // Prepare WHERE clause - try primary key first, then fall back to 'id' property
         [$whereClause, $whereValues] = $this->buildWhereClause($entity);
 
-        // Optimistic-lock check: only #[Version] (never #[VersionAware]) columns are checked,
-        // bound to the entity's currently-tracked value (kept in sync with the DB by the
+        // Optimistic-lock check: the slice's own #[Version] column, bound to the
+        // entity's currently-tracked value (kept in sync with the DB by the
         // deferred reconciliation returned below and by UnitOfWork::clearChanges() refreshing the snapshot).
-        $checkedVersionColumns = $metadata->getCheckedVersionColumns();
+        $checkedVersionColumns = $versionColumns;
         $originalVersionValues = [];
         foreach ($checkedVersionColumns as $checkedColumn) {
             $originalVersionValues[$checkedColumn] = $this->getVersionColumnValue($metadata, $entity, $checkedColumn);

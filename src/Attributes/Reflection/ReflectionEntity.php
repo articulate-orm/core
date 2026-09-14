@@ -89,18 +89,25 @@ class ReflectionEntity extends ReflectionClass {
         $entityProperty = $property->getAttributes(Property::class, ReflectionAttribute::IS_INSTANCEOF);
         /** @var ReflectionAttribute<PrimaryKey>[] $primaryKeyProperty */
         $primaryKeyProperty = $property->getAttributes(PrimaryKey::class);
+        /** @var ReflectionAttribute<Version>[] $versionProperty */
+        $versionProperty = $property->getAttributes(Version::class);
 
-        // A property is considered an entity property if it has either Property or PrimaryKey attribute
-        if (empty($entityProperty) && empty($primaryKeyProperty)) {
+        // A property is an entity property if it has Property, PrimaryKey, or Version — #[Version] implies #[Property].
+        if (empty($entityProperty) && empty($primaryKeyProperty) && empty($versionProperty)) {
             return null;
         }
 
-        $propertyAttribute = $this->resolvePropertyAttribute($entityProperty, $primaryKeyProperty);
+        $propertyAttribute = $this->resolvePropertyAttribute($entityProperty, $primaryKeyProperty, $versionProperty);
         $isPrimaryKey = $this->determineIsPrimaryKey($primaryKeyProperty, $propertyAttribute);
+
+        // #[Version]'s explicit name overrides the naming convention when #[Property] left it unset.
+        if ($propertyAttribute->name === null && !empty($versionProperty)) {
+            $propertyAttribute->name = $versionProperty[0]->newInstance()->name;
+        }
 
         // A freshly-inserted entity's in-memory #[Version] property starts at 0 (like any
         // un-set int property), so the migration-generated column default must match.
-        if ($propertyAttribute->defaultValue === null && !empty($property->getAttributes(Version::class))) {
+        if ($propertyAttribute->defaultValue === null && !empty($versionProperty)) {
             $propertyAttribute->defaultValue = '0';
         }
 
@@ -119,8 +126,10 @@ class ReflectionEntity extends ReflectionClass {
 
     /**
      * Resolves which property attribute to use based on available attributes.
+     *
+     * @param array<ReflectionAttribute<Version>> $versionProperty
      */
-    private function resolvePropertyAttribute(array $entityProperty, array $primaryKeyProperty): Property
+    private function resolvePropertyAttribute(array $entityProperty, array $primaryKeyProperty, array $versionProperty = []): Property
     {
         // Find the explicit Property attribute (not PrimaryKey)
         $explicitProperty = null;
@@ -142,8 +151,12 @@ class ReflectionEntity extends ReflectionClass {
             return $primaryKeyProperty[0]->newInstance();
         }
 
-        // Fallback to first Property attribute
-        return $entityProperty[0]->newInstance();
+        if (!empty($entityProperty)) {
+            return $entityProperty[0]->newInstance();
+        }
+
+        // Bare #[Version]: implies a plain #[Property].
+        return new Property();
     }
 
     /**
@@ -465,6 +478,13 @@ class ReflectionEntity extends ReflectionClass {
             $propertyInstance = !empty($propertyAttributes)
                 ? $propertyAttributes[0]->newInstance()
                 : new Property();
+
+            if ($propertyInstance->name === null) {
+                $propertyInstance->name = $versionAttributes[0]->newInstance()->name;
+            }
+            if ($propertyInstance->defaultValue === null) {
+                $propertyInstance->defaultValue = '0';
+            }
 
             $primaryKeyAttributes = $property->getAttributes(PrimaryKey::class);
 

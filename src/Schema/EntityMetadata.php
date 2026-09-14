@@ -159,20 +159,12 @@ class EntityMetadata {
         // Load soft-delete configuration
         $this->softDeleteable = $this->reflectionEntity->getSoftDeleteableAttribute();
 
-        // Load optimistic-locking configuration
+        // Load optimistic-locking configuration. #[VersionAware] is an inert
+        // acknowledgement marker — no SET/WHERE/bump — so a column appearing in
+        // both a class's own #[Version] and its own #[VersionAware] is merely
+        // redundant, not a contradiction.
         $this->versionProperty = $this->reflectionEntity->getVersionProperty();
         $this->versionAware = $this->reflectionEntity->getVersionAwareAttribute();
-
-        if (
-            $this->versionProperty !== null && $this->versionAware !== null
-            && in_array($this->versionProperty->getColumnName(), $this->versionAware->columns, true)
-        ) {
-            throw new \InvalidArgumentException(sprintf(
-                'Class "%s" declares column "%s" as both its own #[Version] property and in its own #[VersionAware] list.',
-                $this->reflectionEntity->getName(),
-                $this->versionProperty->getColumnName(),
-            ));
-        }
     }
 
     /**
@@ -332,34 +324,47 @@ class EntityMetadata {
     }
 
     /**
-     * Full SET-clause bump list for this class: its own #[Version] column
-     * (if any) plus its own #[VersionAware] columns.
+     * The single version column this slice bumps and checks on UPDATE: its own
+     * #[Version] property's column, or nothing. #[VersionAware] contributes
+     * nothing here — it is an inert acknowledgement marker, not a runtime
+     * participant. Bump list and check list are now identical, so the former
+     * getVersionColumns()/getCheckedVersionColumns() pair collapses to this.
      *
-     * @return string[]
+     * @return string[] zero or one column
      */
     public function getVersionColumns(): array
     {
-        $columns = [];
-
-        if ($this->versionProperty !== null) {
-            $columns[] = $this->versionProperty->getColumnName();
-        }
-
-        if ($this->versionAware !== null) {
-            $columns = array_merge($columns, $this->versionAware->columns);
-        }
-
-        return array_values(array_unique($columns));
+        return $this->versionProperty !== null ? [$this->versionProperty->getColumnName()] : [];
     }
 
     /**
-     * WHERE-clause check list for this class: just its own #[Version]
-     * property's column, if any.
+     * The version columns this slice acknowledges writing without checking, via
+     * its own #[VersionAware] list. Validate-time only — no runtime path reads
+     * this.
      *
      * @return string[]
      */
-    public function getCheckedVersionColumns(): array
+    public function getAcknowledgedVersionColumns(): array
     {
-        return $this->versionProperty !== null ? [$this->versionProperty->getColumnName()] : [];
+        return $this->versionAware !== null ? array_values($this->versionAware->columns) : [];
+    }
+
+    /**
+     * This slice's guard set: the persisted #[Property] columns it declares,
+     * excluding the primary key and its own #[Version] column. A #[Version]
+     * column protects exactly these columns against a lost update. Validate-time
+     * only — flush code never groups by table.
+     *
+     * @return string[]
+     */
+    public function getGuardSet(): array
+    {
+        $excluded = $this->primaryKeyColumns;
+
+        if ($this->versionProperty !== null) {
+            $excluded[] = $this->versionProperty->getColumnName();
+        }
+
+        return array_values(array_diff($this->getColumnNames(), $excluded));
     }
 }

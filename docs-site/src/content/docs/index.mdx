@@ -1,0 +1,115 @@
+---
+title: Articulate
+description: A context-bounded ORM for modular PHP applications that share database tables across modules.
+template: splash
+hero:
+  tagline: The ORM for modular PHP applications — several narrow entity classes, one physical table, no shared-model coupling.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get Started
+      link: /guides/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: Why Articulate?
+      link: '#why-articulate'
+      icon: right-arrow
+      variant: secondary
+    - text: View on GitHub
+      link: https://github.com/articulate-orm/core
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, Aside, Badge } from '@astrojs/starlight/components';
+
+<div style="text-align:center; margin-block: -1.5rem 2.5rem;">
+	<Badge text="PHP 8.4+" variant="tip" size="medium" /> <Badge text="MySQL & PostgreSQL" variant="note" size="medium" /> <Badge text="Apache 2.0" variant="success" size="medium" />
+</div>
+
+## Why Articulate?
+
+Most ORMs make the table/entity boundary the modeling boundary: one table, one primary entity class. In modular systems, that turns shared tables into shared domain objects.
+
+A `users` table may be touched by authentication, administration, billing, public APIs, reporting, and background workers. Those contexts don't need the same fields, relations, invariants, or lifecycle behavior. A single shared `User` entity gradually becomes a coupling point between modules.
+
+<Aside type="tip" title="Table width is a storage decision. Domain boundaries aren't.">
+	How many columns share a table is about storage and locality; how those columns split into contexts is domain modeling. One class per table forces the two to be the same call. Articulate lets them diverge.
+</Aside>
+
+Articulate makes the bounded context the modeling boundary. Several small entity classes can map to the same physical table: `LoginUser` for authentication, `AdminUser` for administration, `BillingCustomer` for billing, and read-only projection entities for public APIs — while still providing the expected ORM foundations: attributes, repositories, relations, migrations, type mapping, identity map, unit of work, lazy loading, and caching.
+
+## What makes it different
+
+<CardGrid stagger>
+	<Card title="Context-bounded entities" icon="puzzle">
+		Multiple entity classes can map to one physical table, each exposing only the fields and relationships needed for that context.
+	</Card>
+	<Card title="Per-context Unit of Work" icon="setting">
+		Each `EntityManager` owns its own `IdentityMap` and `UnitOfWork` — no process-wide singletons, no global state.
+	</Card>
+	<Card title="Explicit per-slice locking" icon="approve-check">
+		Optimistic locking guards only the columns a slice actually owns, so a cosmetic write in one context can't block a critical one in another.
+	</Card>
+	<Card title="Dual-database, first class" icon="seti:db">
+		MySQL 8.0 and PostgreSQL 15 are both primary targets — schema diffing, migrations, and type mapping understand both.
+	</Card>
+	<Card title="Attribute-driven metadata" icon="document">
+		No XML, no YAML, no annotations. All mapping lives in PHP 8 attributes: `#[Entity]`, `#[Property]`, `#[OneToMany]`, and more.
+	</Card>
+	<Card title="Deliberate shared-table writes" icon="star">
+		Cross-entity remove propagation, cache eviction, and version guards all reason correctly about sibling entities sharing a row.
+	</Card>
+</CardGrid>
+
+## Quick start
+
+Install the package:
+
+```bash frame="terminal"
+composer require articulate-orm/core
+```
+
+Map an entity and write your first flush:
+
+```php
+use Articulate\Connection;
+use Articulate\Modules\EntityManager\EntityManager;
+
+#[Entity]
+class User
+{
+    #[PrimaryKey]
+    public ?int $id = null;
+
+    #[Property]
+    public string $name;
+
+    #[Property]
+    public string $email;
+}
+
+$connection = new Connection('mysql:host=127.0.0.1;dbname=myapp', 'user', 'password');
+$em = new EntityManager($connection);
+
+$user = new User();
+$user->name = 'Jane';
+$user->email = 'jane@example.com';
+$em->persist($user);
+$em->flush();
+
+$user = $em->getRepository(User::class)->find($user->id);
+```
+
+<CardGrid>
+	<Card title="Next: Getting Started" icon="rocket">
+		Install the library, wire the services, and run your first entity through a full persist/find cycle.
+
+		[Read the guide →](/guides/getting-started/)
+	</Card>
+	<Card title="Next: Context-Bounded Entities" icon="open-book">
+		The core idea behind Articulate, explained with a before/after comparison.
+
+		[Read the concept →](/concepts/context-bounded-entities/)
+	</Card>
+</CardGrid>

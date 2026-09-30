@@ -1,0 +1,59 @@
+/* Light, airy accent palette for Articulate docs */
+:root {
+	--sl-color-accent-low: #e6f0ff;
+	--sl-color-accent: #3a6fd8;
+	--sl-color-accent-high: #1f3a73;
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #f8fafc;
+	--sl-color-gray-2: #eef2f7;
+	--sl-color-gray-3: #dbe3ec;
+	--sl-color-gray-4: #9aa7b8;
+	--sl-color-gray-5: #64748b;
+	--sl-color-gray-6: #f1f5f9;
+	--sl-color-black: #ffffff;
+	--sl-font: 'Inter', system-ui, sans-serif;
+}
+
+:root[data-theme='dark'] {
+	--sl-color-accent-low: #1c2b47;
+	--sl-color-accent: #7aa2f7;
+	--sl-color-accent-high: #cdd9f5;
+	--sl-color-black: #0f172a;
+	--sl-color-gray-1: #e2e8f0;
+	--sl-color-gray-2: #cbd5e1;
+	--sl-color-gray-5: #64748b;
+	--sl-color-gray-6: #1e293b;
+	--sl-color-bg: #0f172a;
+}
+
+.hero {
+	padding-block: 2rem 3rem;
+}
+
+.hero h1 {
+	background: linear-gradient(120deg, var(--sl-color-accent-high), var(--sl-color-accent));
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+:root[data-theme='dark'] .hero h1 {
+	background: linear-gradient(120deg, #dbe6ff, #7aa2f7);
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+.sl-markdown-content h2 {
+	border-bottom: 1px solid var(--sl-color-hairline-light);
+	padding-bottom: 0.35rem;
+}
+
+a.card {
+	transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+a.card:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 8px 24px rgba(58, 111, 216, 0.12);
+}

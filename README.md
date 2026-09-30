@@ -18,6 +18,10 @@ Articulate makes the bounded context the modeling boundary. Several small entity
 
 Articulate still provides the expected ORM foundations: attributes, repositories, relations, migrations, type mapping, identity map, unit of work, lazy loading, and caching. The difference is that these pieces are designed around context-bounded entities from the start.
 
+## Documentation
+
+Full documentation site: **https://articulate-orm.github.io/core/** (source in [`docs-site/`](./docs-site)).
+
 ## Badges
 
 [![CI](https://github.com/articulate-orm/core/workflows/QA/badge.svg)](https://github.com/articulate-orm/core/actions)

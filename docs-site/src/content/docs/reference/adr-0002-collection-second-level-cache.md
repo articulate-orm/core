@@ -82,6 +82,46 @@ queries that opted into `cacheable()`. A hot id referenced by many distinct cach
 an unbounded (until TTL) reverse-index entry list — no cap/dedup is applied; this is a deliberate
 "don't optimize before profiling" call, documented here rather than solved speculatively.
 
+**PSR-6 eviction opacity — closed via read-time cross-validation.** TTL + grace buffer protects against
+the reverse-index *expiring* before the entry it guards, but a PSR-6 pool under memory pressure (e.g.
+Redis `allkeys-lru`) can evict a key early regardless of TTL. At flush time alone this is unrecoverable:
+an empty reverse-index entry for a changed/deleted id is indistinguishable from "never referenced" —
+there is no signal to tell the two apart from that side.
+
+At **read time**, the ambiguity resolves: by the write-time invariant (a query-cache entry and the
+reverse-index entries for every id it contains are always written together), a reverse-index entry's
+absence for an id that a *currently cached list* claims to contain can only mean it existed and was
+evicted since — never "it never existed", because the list's own existence is proof the index was
+written at the same moment. This lets the read path detect eviction-induced staleness that flush-time
+invalidation alone cannot.
+
+**Protocol — three outcomes on a `cacheable()` query resolution:**
+1. **List-cache hit, reverse-index intact for every id in it** (checked via a single batched
+   `CacheItemPoolInterface::getItems()` call, not N round-trips) — trust the cached list, serve normally.
+2. **List-cache hit, reverse-index missing for one or more of its ids** — treated as a detected
+   inconsistency, not silently served. The *entire* cached list entry is discarded (not partially
+   repaired — whole-list discard chosen over per-id patching for simplicity: no partially-healed
+   intermediate state to reason about) and the query runs fresh; writing the new list + reverse-index
+   naturally repairs the link as a side effect of the normal write path.
+3. **List-cache miss entirely** (no list, no index) — ordinary first-query path; hydration still
+   prefers resolving each row through the existing per-entity `SecondLevelCache`/managed-entity-store
+   path rather than assuming nothing is cached (already-existing `QueryResultExecutor` behavior, not
+   new).
+
+This fully closes the previously-unfixable update-case gap: if a flush-time invalidation silently
+missed evicting a query-cache entry because its reverse-index was already gone, that same absence is
+observed on the very next read and triggers outcome 2 — stale data is never served past that point. The
+accepted cost is explicit: every cache hit now pays one additional batched reverse-index existence
+check alongside the id resolution it already performs. A false positive (reverse-index evicted for an
+unrelated, harmless reason after a correct flush already ran) costs one extra requery, never incorrect
+data — consistent with this codebase's existing bias toward failing back to a fresh query rather than
+risking stale output.
+
+**Serve-time ghost filtering (still kept, independent of the above):** resolving a cached id into an
+entity that turns out to have been deleted (null resolution) drops that id from the served result
+without discarding the whole list — a narrower, cheaper complement to outcome 2 for the pure-deletion
+case, costing nothing beyond the hydration lookup already being performed.
+
 ### Module placement
 
 New `src/Modules/Cache/` module holds only the new code: `CollectionCacheInterface` +

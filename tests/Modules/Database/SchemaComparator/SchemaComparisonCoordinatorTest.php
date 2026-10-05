@@ -563,6 +563,105 @@ class SchemaComparisonCoordinatorTest extends TestCase {
 
         return $entity;
     }
+
+    #[AllowMockObjectsWithoutExpectations]
+    public function testCompareAllSkipsNonEntitiesButStillProcessesLaterEntities(): void
+    {
+        $nonEntity = $this->createStub(ReflectionEntity::class);
+        $nonEntity->method('isEntity')->willReturn(false);
+
+        $entity = $this->createStub(ReflectionEntity::class);
+        $entity->method('isEntity')->willReturn(true);
+        $entity->method('getTableName')->willReturn('users');
+
+        $createResult = new TableCompareResult('users', TableCompareResult::OPERATION_CREATE);
+
+        $this->schemaReader->method('getTables')->willReturn([]);
+        $this->relationDefinitionCollector->method('collectManyToManyTables')->willReturn([]);
+        $this->relationDefinitionCollector->method('collectMorphToManyTables')->willReturn([]);
+        $this->entityTableComparator->expects($this->once())
+            ->method('compareEntityTable')
+            ->with([$entity], [], 'users')
+            ->willReturn($createResult);
+
+        $results = iterator_to_array($this->coordinator->compareAll([$nonEntity, $entity]));
+
+        $this->assertCount(1, $results);
+        $this->assertSame($createResult, $results[0]);
+    }
+
+    #[AllowMockObjectsWithoutExpectations]
+    public function testCircularDependencyExceptionMessageListsExactCycleAndRemediation(): void
+    {
+        $entityA = $this->createTableEntity('table_a');
+        $entityB = $this->createTableEntity('table_b');
+        $resultA = new TableCompareResult(
+            'table_a',
+            TableCompareResult::OPERATION_CREATE,
+            foreignKeys: [
+                new ForeignKeyCompareResult('fk_table_a_b_id', TableCompareResult::OPERATION_CREATE, 'b_id', 'table_b'),
+            ],
+        );
+        $resultB = new TableCompareResult(
+            'table_b',
+            TableCompareResult::OPERATION_CREATE,
+            foreignKeys: [
+                new ForeignKeyCompareResult('fk_table_b_a_id', TableCompareResult::OPERATION_CREATE, 'a_id', 'table_a'),
+            ],
+        );
+
+        $this->schemaReader->method('getTables')->willReturn([]);
+        $this->relationDefinitionCollector->method('collectManyToManyTables')->willReturn([]);
+        $this->relationDefinitionCollector->method('collectMorphToManyTables')->willReturn([]);
+        $this->entityTableComparator->method('compareEntityTable')
+            ->willReturnCallback(fn (array $entityGroup, array $existingTables, string $tableName) => match ($tableName) {
+                'table_a' => $resultA,
+                'table_b' => $resultB,
+            });
+
+        try {
+            iterator_to_array($this->coordinator->compareAll([$entityA, $entityB]));
+            $this->fail('Expected a RuntimeException for the circular dependency.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(
+                'Circular table foreign key dependency detected while ordering schema changes: table_a -> table_b -> table_a. '
+                . 'Create one side of the relationship without an inline foreign key and add the constraint in a later migration.',
+                $e->getMessage(),
+            );
+        }
+    }
+
+    #[AllowMockObjectsWithoutExpectations]
+    public function testGetForeignKeyDependenciesSkipsNonCreateForeignKeysButKeepsScanning(): void
+    {
+        $dependentEntity = $this->createTableEntity('orders');
+        $referencedEntity = $this->createTableEntity('customers');
+
+        $orderResult = new TableCompareResult(
+            'orders',
+            TableCompareResult::OPERATION_CREATE,
+            foreignKeys: [
+                new ForeignKeyCompareResult('fk_orders_deleted_ref', TableCompareResult::OPERATION_DELETE, 'legacy_id', 'customers'),
+                new ForeignKeyCompareResult('fk_orders_customer_id', TableCompareResult::OPERATION_CREATE, 'customer_id', 'customers'),
+            ],
+        );
+        $customerResult = new TableCompareResult('customers', TableCompareResult::OPERATION_CREATE);
+
+        $this->schemaReader->method('getTables')->willReturn([]);
+        $this->relationDefinitionCollector->method('collectManyToManyTables')->willReturn([]);
+        $this->relationDefinitionCollector->method('collectMorphToManyTables')->willReturn([]);
+        $this->entityTableComparator->method('compareEntityTable')
+            ->willReturnCallback(fn (array $entityGroup, array $existingTables, string $tableName) => match ($tableName) {
+                'orders' => $orderResult,
+                'customers' => $customerResult,
+            });
+
+        $results = iterator_to_array($this->coordinator->compareAll([$dependentEntity, $referencedEntity]));
+
+        // customers must come before orders because of the surviving CREATE foreign key,
+        // even though the DELETE foreign key is scanned first in the loop.
+        $this->assertSame(['customers', 'orders'], array_map(fn ($result) => $result->name, $results));
+    }
 }
 
 #[Index(['missingField'], name: 'idx_missing_field')]

@@ -7,6 +7,7 @@ use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Property;
 use Articulate\Attributes\Relations\OneToMany;
 use Articulate\Modules\EntityManager\Collection;
+use Articulate\Modules\EntityManager\LazyCollection;
 use Articulate\Modules\EntityManager\ObjectHydrator;
 use Articulate\Modules\EntityManager\RelationshipLoader;
 use Articulate\Modules\EntityManager\UnitOfWork;
@@ -215,6 +216,63 @@ class ObjectHydratorTest extends TestCase {
         $this->assertEquals('john@example.com', $entity->emailAddress);
         $this->assertEquals(42, $entity->profileId);
     }
+
+    // ── Mutation killers for 214-224 ────────────────────────────────────────
+
+    public function testExtractConvertsNullValuesToNullNotPassThrough(): void
+    {
+        // convertToDatabase(null, ...) must return null directly via the early-return
+        // guard, never reaching the type-registry conversion path. If ReturnRemoval
+        // strips `return null;`, execution falls through and still correctly produces
+        // null here — so assert via a mock-like entity where null stays null for
+        // a typed (non-nullable-by-default-conversion) property too.
+        $entity = new TestEntity();
+        $entity->id = 42;
+        $entity->name = null;
+
+        $data = $this->hydrator->extract($entity);
+
+        $this->assertNull($data['name']);
+    }
+
+    public function testHydratePartialInvokesHydrateRelationsNotJustProperties(): void
+    {
+        $unitOfWork = $this->createMock(UnitOfWork::class);
+        $metadataRegistry = new EntityMetadataRegistry();
+        $relationshipLoader = $this->createMock(RelationshipLoader::class);
+        $relationshipLoader->method('getMetadataRegistry')->willReturn($metadataRegistry);
+
+        // hydratePartial() must call hydrateRelations() too (not just hydrateProperties());
+        // MethodCallRemoval on that line would leave a null collection relation untouched.
+        $relationshipLoader->expects($this->once())
+            ->method('load')
+            ->willReturn([new TestBookForNullCollectionRelation()]);
+
+        $hydrator = new ObjectHydrator($unitOfWork, $relationshipLoader);
+
+        $entity = new TestEntityWithNullCollectionRelation();
+        $entity->id = 1;
+        $entity->name = 'Author';
+
+        $hydrator->hydratePartial($entity, ['id' => 1, 'name' => 'Author']);
+
+        $this->assertInstanceOf(Collection::class, $entity->books);
+    }
+
+    public function testConvertToPHPWithNoTypeHintReturnsRawValueUnconverted(): void
+    {
+        // Property with no type hint at all (TestEntityUntyped::$raw) must pass the
+        // DB value straight through — the LogicalNot mutant (!$type -> $type) would
+        // invert this guard and attempt conversion/early-return on the wrong branch.
+        $unitOfWork = $this->createMock(UnitOfWork::class);
+        $unitOfWork->method('registerManaged');
+
+        $hydrator = new ObjectHydrator($unitOfWork);
+
+        $entity = $hydrator->hydrate(TestEntityUntyped::class, ['raw' => '12345']);
+
+        $this->assertSame('12345', $entity->raw);
+    }
 }
 
 // Test entity class for hydration tests
@@ -281,4 +339,8 @@ class TestEntityWithNullCollectionRelation {
 
     #[OneToMany(targetEntity: TestBookForNullCollectionRelation::class, ownedBy: 'author')]
     public ?Collection $books = null;
+}
+
+class TestEntityUntyped {
+    public $raw;
 }

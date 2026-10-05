@@ -1397,6 +1397,106 @@ class ColumnComparatorTest extends TestCase {
 
         $this->assertTrue($result['isAutoIncrement']);
     }
+
+    /**
+     * Line 261: `'referencedColumn' => $existing['referencedColumn'] ?? $incoming['referencedColumn']`
+     * Mutation: swaps operands to `$incoming['referencedColumn'] ?? $existing['referencedColumn']`.
+     * When existing is non-null it must win, even if incoming is also non-null and different.
+     */
+    public function testMergeColumnPropertiesReferencedColumnPrefersExistingWhenBothSet(): void
+    {
+        $existing = $this->makeProps(['referencedColumn' => 'existing_id']);
+        $incoming = $this->makeProps(['referencedColumn' => 'incoming_id']);
+
+        $result = $this->mergeProps($incoming, $existing);
+
+        $this->assertSame('existing_id', $result['referencedColumn']);
+    }
+
+    public function testMergeColumnPropertiesReferencedColumnFallsBackToIncomingWhenExistingNull(): void
+    {
+        $existing = $this->makeProps(['referencedColumn' => null]);
+        $incoming = $this->makeProps(['referencedColumn' => 'incoming_id']);
+
+        $result = $this->mergeProps($incoming, $existing);
+
+        $this->assertSame('incoming_id', $result['referencedColumn']);
+    }
+
+    /**
+     * Line 262: `'generatorType' => $existing['generatorType'] ?? $incoming['generatorType']`
+     */
+    public function testMergeColumnPropertiesGeneratorTypePrefersExistingWhenBothSet(): void
+    {
+        $existing = $this->makeProps(['generatorType' => 'existing_gen']);
+        $incoming = $this->makeProps(['generatorType' => 'incoming_gen']);
+
+        $result = $this->mergeProps($incoming, $existing);
+
+        $this->assertSame('existing_gen', $result['generatorType']);
+    }
+
+    public function testMergeColumnPropertiesGeneratorTypeFallsBackToIncomingWhenExistingNull(): void
+    {
+        $existing = $this->makeProps(['generatorType' => null]);
+        $incoming = $this->makeProps(['generatorType' => 'incoming_gen']);
+
+        $result = $this->mergeProps($incoming, $existing);
+
+        $this->assertSame('incoming_gen', $result['generatorType']);
+    }
+
+    /**
+     * Line 263: `'sequence' => $existing['sequence'] ?? $incoming['sequence']`
+     */
+    public function testMergeColumnPropertiesSequencePrefersExistingWhenBothSet(): void
+    {
+        $existing = $this->makeProps(['sequence' => 'existing_seq']);
+        $incoming = $this->makeProps(['sequence' => 'incoming_seq']);
+
+        $result = $this->mergeProps($incoming, $existing);
+
+        $this->assertSame('existing_seq', $result['sequence']);
+    }
+
+    public function testMergeColumnPropertiesSequenceFallsBackToIncomingWhenExistingNull(): void
+    {
+        $existing = $this->makeProps(['sequence' => null]);
+        $incoming = $this->makeProps(['sequence' => 'incoming_seq']);
+
+        $result = $this->mergeProps($incoming, $existing);
+
+        $this->assertSame('incoming_seq', $result['sequence']);
+    }
+
+    /**
+     * validateRelationConflicts, line 228: `if ($incoming['relation'] && $existing['relation'])`
+     * Mutation to `||` would enter the branch when only one side has a relation,
+     * where it would then crash dereferencing a null relation. Covering the
+     * "incoming has relation, existing does not" case (handled earlier by the
+     * scalar-vs-relation branch) isn't useful here; instead assert that two
+     * compatible relations (both pointing to the same target/column) merge
+     * without throwing, proving the && branch runs correctly when both sides
+     * truly have relations.
+     */
+    public function testMergeColumnDefinitionWithTwoCompatibleRelationsDoesNotThrow(): void
+    {
+        $propertiesIndexed = $this->comparator->mergeColumnDefinition(
+            [],
+            'user_id',
+            $this->relationOf(CcPostA::class, 'user'),
+            'posts'
+        );
+
+        $result = $this->comparator->mergeColumnDefinition(
+            $propertiesIndexed,
+            'user_id',
+            $this->relationOf(CcPostB::class, 'user'),
+            'posts'
+        );
+
+        $this->assertSame('int', $result['user_id']['type']);
+    }
 }
 
 // Fixture entity classes — defined in same file to avoid PSR-4 one-class-per-file constraint

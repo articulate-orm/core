@@ -277,6 +277,92 @@ class PostgresqlMigrationGeneratorTest extends AbstractTestCase {
         $this->assertEquals('JSONB', $result);
     }
 
+    public function testRollbackOfDeletedTableRecreatesDeletedIndexes(): void
+    {
+        $result = $this->generator->rollback(new TableCompareResult(
+            name: 'products',
+            operation: CompareResult::OPERATION_DELETE,
+            columns: [],
+            indexes: [
+                new \Articulate\Modules\Database\SchemaComparator\Models\IndexCompareResult(
+                    'idx_products_sku',
+                    CompareResult::OPERATION_DELETE,
+                    ['sku'],
+                    true,
+                ),
+            ],
+        ));
+
+        $this->assertCount(2, $result);
+        $this->assertStringContainsString('CREATE TABLE "products"', $result[0]);
+        $this->assertEquals(
+            'CREATE UNIQUE INDEX "idx_products_sku" ON "products" ("sku")',
+            $result[1],
+        );
+    }
+
+    public function testGenerateAlterTableCombinesMultipleForeignKeyChanges(): void
+    {
+        $result = $this->generator->generate(new TableCompareResult(
+            name: 'posts',
+            operation: CompareResult::OPERATION_UPDATE,
+            foreignKeys: [
+                new \Articulate\Modules\Database\SchemaComparator\Models\ForeignKeyCompareResult(
+                    'fk_posts_author_id',
+                    CompareResult::OPERATION_CREATE,
+                    'author_id',
+                    'users',
+                    'id',
+                ),
+                new \Articulate\Modules\Database\SchemaComparator\Models\ForeignKeyCompareResult(
+                    'fk_posts_category_id',
+                    CompareResult::OPERATION_CREATE,
+                    'category_id',
+                    'categories',
+                    'id',
+                ),
+            ],
+        ));
+
+        $this->assertCount(1, $result);
+        $this->assertStringContainsString('fk_posts_author_id', $result[0]);
+        $this->assertStringContainsString('fk_posts_category_id', $result[0]);
+    }
+
+    public function testFormatDefaultValueEscapesSingleQuotes(): void
+    {
+        $result = $this->callProtectedMethod('formatDefaultValue', ["O'Brien"]);
+
+        $this->assertEquals("'O''Brien'", $result);
+    }
+
+    public function testReverseOperationKeepsUnknownOperationUnchanged(): void
+    {
+        $result = $this->callProtectedMethod('reverseOperation', ['some_unknown_operation']);
+
+        $this->assertEquals('some_unknown_operation', $result);
+    }
+
+    public function testGenerateModifyColumnOnlyCollectsChangesWhenPresent(): void
+    {
+        // No type/length/nullable/default change: isRollback default false must not flip
+        // the data source used, so this must compare propertyData not columnData.
+        $result = $this->generator->generate(new TableCompareResult(
+            name: 'users',
+            operation: CompareResult::OPERATION_UPDATE,
+            columns: [
+                new ColumnCompareResult(
+                    name: 'status',
+                    operation: CompareResult::OPERATION_UPDATE,
+                    propertyData: new PropertiesData(type: 'string', isNullable: true, length: 32),
+                    columnData: new PropertiesData(type: 'string', isNullable: true, length: 32),
+                ),
+            ],
+        ));
+
+        $this->assertEquals([], $result);
+    }
+
     private function callProtectedMethod(string $methodName, array $args = []): mixed
     {
         $reflection = new \ReflectionClass($this->generator);

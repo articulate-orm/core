@@ -262,6 +262,47 @@ class MySqlMigrationGeneratorTest extends AbstractTestCase {
         $this->assertEquals('`score` INT', $result);
     }
 
+    public function testShouldUseOnlineDDLReturnsTrueForConcurrentIndex(): void
+    {
+        $tableResult = new TableCompareResult(
+            'users',
+            CompareResult::OPERATION_UPDATE,
+            [],
+            [
+                new IndexCompareResult('idx_users_email', CompareResult::OPERATION_CREATE, ['email'], true, true),
+            ],
+            [],
+            []
+        );
+
+        $result = $this->callProtectedMethod('shouldUseOnlineDDL', [$tableResult]);
+
+        $this->assertTrue($result);
+    }
+
+    public function testRollbackOfDeletedTableRecreatesDeletedIndexInline(): void
+    {
+        $result = $this->generator->rollback(new TableCompareResult(
+            name: 'products',
+            operation: CompareResult::OPERATION_DELETE,
+            columns: [],
+            indexes: [
+                new IndexCompareResult('idx_products_sku', CompareResult::OPERATION_DELETE, ['sku'], false, false),
+            ],
+        ));
+
+        $this->assertCount(1, $result);
+        $this->assertStringContainsString('CREATE TABLE `products`', $result[0]);
+        $this->assertStringContainsString('idx_products_sku', $result[0]);
+    }
+
+    public function testReverseOperationKeepsUnknownOperationUnchanged(): void
+    {
+        $result = $this->callProtectedMethod('reverseOperation', ['some_unknown_operation']);
+
+        $this->assertEquals('some_unknown_operation', $result);
+    }
+
     private function callProtectedMethod(string $methodName, array $args = []): mixed
     {
         $reflection = new \ReflectionClass($this->generator);

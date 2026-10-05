@@ -8,6 +8,7 @@ use Articulate\Attributes\Property;
 use Articulate\Attributes\Relations\ManyToMany;
 use Articulate\Attributes\Relations\ManyToOne;
 use Articulate\Attributes\Relations\OneToMany;
+use Articulate\Attributes\SoftDeleteable;
 use Articulate\Exceptions\ScheduleConflictException;
 use Articulate\Modules\EntityManager\Collection;
 use Articulate\Modules\EntityManager\DeferredImplicitStrategy;
@@ -588,6 +589,200 @@ class UnitOfWorkTest extends TestCase {
         $this->assertCount(1, $changes['deletes'], 'Only one DELETE needed for sibling entities on the same row');
         $this->assertSame($entityA, $changes['deletes'][0]);
     }
+
+    // ── Mutation killers for 269-280 ────────────────────────────────────────
+
+    public function testRemoveOnSoftDeleteableEntitySetsSoftDeleteFieldAndSchedulesUpdate(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $uow = new UnitOfWork(null, null, $registry);
+
+        $entity = new UnitOfWorkSoftDeleteEntity();
+        $entity->id = 1;
+        $entity->name = 'Alice';
+
+        $uow->registerManaged($entity, ['id' => 1, 'name' => 'Alice']);
+        $uow->remove($entity);
+
+        $this->assertNotNull($entity->deletedAt, 'MethodCallRemoval mutant would leave deletedAt unset');
+        $this->assertEquals(EntityState::REMOVED, $uow->getEntityState($entity));
+
+        $changes = $uow->getChangeSets();
+        $this->assertCount(1, $changes['softDeletes']);
+        $this->assertSame($entity, $changes['softDeletes'][0]);
+        $this->assertCount(0, $changes['deletes'], 'Soft-deleted entity must not also appear in hard deletes');
+    }
+
+    public function testComputeChangeSetsInvokesPreUpdateCallbackOnlyOnceWhenNotAlreadyScheduled(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $uow = new UnitOfWork(metadataRegistry: $registry);
+
+        UnitOfWorkPreUpdateCallbackEntity::$preUpdateCallCount = 0;
+
+        $entity = new UnitOfWorkPreUpdateCallbackEntity();
+        $entity->id = 1;
+        $entity->name = 'Original';
+
+        $uow->registerManaged($entity, ['id' => 1, 'name' => 'Original']);
+        $entity->name = 'Changed';
+
+        $uow->computeChangeSets();
+
+        $this->assertSame(1, UnitOfWorkPreUpdateCallbackEntity::$preUpdateCallCount);
+    }
+
+    public function testExecutePostCallbacksInvokesPostRemoveForEachSoftDeletedEntity(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $uow = new UnitOfWork(metadataRegistry: $registry);
+
+        $entity = new UnitOfWorkPostRemoveCallbackEntity();
+        $entity->id = 1;
+        $entity->name = 'Alice';
+
+        UnitOfWorkPostRemoveCallbackEntity::$postRemoveCallCount = 0;
+
+        $uow->executePostCallbacks([
+            'inserts' => [],
+            'updates' => [],
+            'deletes' => [],
+            'softDeletes' => [$entity],
+        ]);
+
+        $this->assertSame(1, UnitOfWorkPostRemoveCallbackEntity::$postRemoveCallCount);
+    }
+
+    public function testDetachGraphVisitsEachEntityOnlyOnce(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $uow = new UnitOfWork(null, null, $registry);
+
+        $author = new UnitOfWorkDetachAuthor();
+        $author->id = 1;
+        $author->name = 'Author';
+
+        $book = new UnitOfWorkDetachBook();
+        $book->id = 10;
+        $book->title = 'Book';
+        $book->author = $author;
+        $author->books = new Collection([$book]);
+
+        $uow->registerManaged($author, ['id' => 1, 'name' => 'Author']);
+        $uow->registerManaged($book, ['id' => 10, 'title' => 'Book']);
+
+        // Without the visited-guard (TrueValue mutant sets $visited[$oid] = false,
+        // defeating isset() short-circuit), this would infinite-loop on the
+        // author<->book cycle. Reaching this assertion at all proves termination.
+        $uow->detach($author);
+
+        $this->assertEquals(EntityState::DETACHED, $uow->getEntityState($author));
+        $this->assertEquals(EntityState::DETACHED, $uow->getEntityState($book));
+    }
+
+    public function testDetachSingleCallsUntrackEntityOnChangeTrackingStrategy(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $strategy = new RecordingUntrackStrategy($registry);
+        $uow = new UnitOfWork($strategy, null, $registry);
+
+        $entity = new UnitOfWorkTestEntity();
+        $entity->id = 1;
+        $entity->name = 'test';
+
+        $uow->registerManaged($entity, ['id' => 1, 'name' => 'test']);
+        $uow->detach($entity);
+
+        $this->assertTrue($strategy->untracked, 'untrackEntity() must be invoked on detach, else stale snapshots leak');
+    }
+
+    public function testGetInitializedRelatedEntitiesReturnsAllDistinctRelatedObjects(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $uow = new UnitOfWork(null, null, $registry);
+
+        $author = new UnitOfWorkDetachAuthor();
+        $author->id = 1;
+        $author->name = 'Author';
+
+        $book1 = new UnitOfWorkDetachBook();
+        $book1->id = 10;
+        $book1->title = 'Book1';
+        $book1->author = $author;
+
+        $book2 = new UnitOfWorkDetachBook();
+        $book2->id = 11;
+        $book2->title = 'Book2';
+        $book2->author = $author;
+
+        $author->books = new Collection([$book1, $book2]);
+
+        $uow->registerManaged($author, ['id' => 1, 'name' => 'Author']);
+        $uow->registerManaged($book1, ['id' => 10, 'title' => 'Book1']);
+        $uow->registerManaged($book2, ['id' => 11, 'title' => 'Book2']);
+
+        // array_values() mutant removal would not break the equality below for a plain
+        // sequential list, so assert the keys are reindexed from 0 rather than preserving
+        // the original spl_object_id()-keyed array.
+        $reflection = new \ReflectionClass($uow);
+        $method = $reflection->getMethod('getInitializedRelatedEntities');
+        $method->setAccessible(true);
+
+        $related = $method->invoke($uow, $author);
+
+        $this->assertSame([0, 1], array_keys($related), 'Result must be reindexed from 0 via array_values()');
+        $this->assertCount(2, $related);
+    }
+
+    public function testCanWriteRelationReferenceAcceptsOwningMorphToRelation(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $uow = new UnitOfWork(null, null, $registry);
+
+        $owner = new UnitOfWorkMorphToOwner();
+        $owner->id = 1;
+        $owner->name = 'Owner';
+
+        $target = new UnitOfWorkMorphToTarget();
+        $target->id = 5;
+        $target->name = 'Target';
+        $owner->commentable = $target;
+
+        $uow->registerManaged($owner, ['id' => 1, 'name' => 'Owner']);
+        $uow->registerManaged($target, ['id' => 5, 'name' => 'Target']);
+
+        // assertNoInvalidReferences() must NOT throw for a MANAGED morph target —
+        // the LogicalOrSingleSubExprNegation mutant (isMorphTo() negated) would make
+        // canWriteRelationReference() always return false for MorphTo, skipping the
+        // check entirely and silently hiding real violations. Prove the positive path
+        // is actually exercised instead.
+        $uow->assertNoInvalidReferences();
+        $this->assertTrue(true);
+    }
+
+    public function testCanWriteRelationReferenceRejectsDetachedMorphToTarget(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $uow = new UnitOfWork(null, null, $registry);
+
+        $owner = new UnitOfWorkMorphToOwner();
+        $owner->id = 1;
+        $owner->name = 'Owner';
+
+        $target = new UnitOfWorkMorphToTarget();
+        $target->id = 5;
+        $target->name = 'Target';
+        $owner->commentable = $target;
+
+        $uow->registerManaged($owner, ['id' => 1, 'name' => 'Owner']);
+        $uow->registerManaged($target, ['id' => 5, 'name' => 'Target']);
+        $uow->detach($target);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage("relation 'commentable' references detached entity");
+
+        $uow->assertNoInvalidReferences();
+    }
 }
 
 // Test entity class for ID generation tests
@@ -668,4 +863,102 @@ class UnitOfWorkDetachTag {
 
     #[Property]
     public string $name;
+}
+
+#[Entity]
+#[SoftDeleteable]
+class UnitOfWorkSoftDeleteEntity {
+    #[PrimaryKey]
+    public int $id;
+
+    #[Property]
+    public string $name;
+
+    #[Property]
+    public ?\DateTimeImmutable $deletedAt = null;
+}
+
+#[Entity]
+class UnitOfWorkPreUpdateCallbackEntity {
+    public static int $preUpdateCallCount = 0;
+
+    #[PrimaryKey]
+    public int $id;
+
+    #[Property]
+    public string $name;
+
+    #[\Articulate\Attributes\Lifecycle\PreUpdate]
+    public function onPreUpdate(): void
+    {
+        self::$preUpdateCallCount++;
+    }
+}
+
+#[Entity]
+class UnitOfWorkPostRemoveCallbackEntity {
+    public static int $postRemoveCallCount = 0;
+
+    #[PrimaryKey]
+    public int $id;
+
+    #[Property]
+    public string $name;
+
+    #[\Articulate\Attributes\Lifecycle\PostRemove]
+    public function onPostRemove(): void
+    {
+        self::$postRemoveCallCount++;
+    }
+}
+
+class RecordingUntrackStrategy implements \Articulate\Modules\EntityManager\ChangeTrackingStrategy {
+    public bool $untracked = false;
+
+    public function __construct(private readonly EntityMetadataRegistry $registry)
+    {
+    }
+
+    public function trackEntity(object $entity, array $originalData): void
+    {
+    }
+
+    public function untrackEntity(object $entity): void
+    {
+        $this->untracked = true;
+    }
+
+    public function computeChangeSet(object $entity): array
+    {
+        return [];
+    }
+
+    public function refreshSnapshot(object $entity): void
+    {
+    }
+
+    public function clear(): void
+    {
+    }
+}
+
+#[Entity]
+class UnitOfWorkMorphToTarget {
+    #[PrimaryKey]
+    public int $id;
+
+    #[Property]
+    public string $name;
+}
+
+#[Entity]
+class UnitOfWorkMorphToOwner {
+    #[PrimaryKey]
+    public int $id;
+
+    #[Property]
+    public string $name;
+
+    #[\Articulate\Attributes\Relations\MorphTo]
+    public ?UnitOfWorkMorphToTarget $commentable = null;
 }

@@ -54,4 +54,24 @@ class DateTimeTypeConverterTest extends TestCase {
     {
         $this->assertNull($this->converter->convertToDatabase(null));
     }
+
+    public function testConvertToDatabasePassesThroughNonDateTimeValue(): void
+    {
+        // Covers LogicalOrAllSubExprNegation: the instanceof check must use OR
+        // so either DateTime or DateTimeImmutable is formatted; a plain string
+        // (neither) must pass through unchanged, proving the check isn't an
+        // always-true/always-false collapse.
+        $this->assertSame('already-a-string', $this->converter->convertToDatabase('already-a-string'));
+    }
+
+    public function testConvertImmutableWithNullTargetTypeReturnsSameInstance(): void
+    {
+        // Covers ReturnRemoval mutant on "return $value;" inside the
+        // DateTime/DateTimeImmutable branch when no conversion is requested.
+        $dateTime = new DateTimeImmutable('2024-01-01 00:00:00');
+
+        $result = $this->converter->convertToPHP($dateTime);
+
+        $this->assertSame($dateTime, $result);
+    }
 }

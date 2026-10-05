@@ -378,6 +378,35 @@ class QueryBuilderCacheTest extends DatabaseTestCase {
         $this->assertEquals('Cached Entity', $result2[0]->name);
     }
 
+    /**
+     * Mutant: TrueValue on `return true` → `return false` in hasAggregateFunction()
+     * (QueryBuilder.php:1027). If aggregate detection were disabled, getResult() would try
+     * to hydrate an aggregate row (e.g. COUNT(*)) into the full entity class, which either
+     * throws or silently produces wrong/partial objects instead of the raw scalar row.
+     */
+    #[DataProvider('databaseProvider')]
+    public function testGetResultBypassesHydrationForAggregateSelect(string $databaseName): void
+    {
+        $this->setCurrentDatabase($this->getConnection($databaseName), $databaseName);
+        $this->connection = $this->getCurrentConnection();
+        $this->entityManager = new EntityManager($this->connection);
+
+        $this->connection->executeQuery('DROP TABLE IF EXISTS cache_aggregate_entities');
+        $this->connection->executeQuery('CREATE TABLE cache_aggregate_entities (id INT PRIMARY KEY, name VARCHAR(255))');
+        $this->connection->executeQuery("INSERT INTO cache_aggregate_entities (id, name) VALUES (1, 'A'), (2, 'B')");
+
+        $qb = $this->entityManager->createQueryBuilder(CacheTestEntity::class)
+            ->selectRaw('COUNT(*) as total')
+            ->from('cache_aggregate_entities');
+
+        $result = $qb->getResult();
+
+        $this->assertIsArray($result);
+        $this->assertCount(1, $result);
+        $this->assertArrayHasKey('total', $result[0]);
+        $this->assertEquals(2, $result[0]['total']);
+    }
+
     #[DataProvider('databaseProvider')]
     public function testCacheExpiration(string $databaseName): void
     {

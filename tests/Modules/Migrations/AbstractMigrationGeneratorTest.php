@@ -354,11 +354,171 @@ class AbstractMigrationGeneratorTest extends AbstractTestCase {
 
         $this->assertEquals('', $result);
     }
+    #[AllowMockObjectsWithoutExpectations]
+    public function testGenerateFiltersOutEmptyAlterStatement(): void
+    {
+        $generator = new EmptyStatementMigrationGenerator($this->typeRegistry);
+        $compareResult = new TableCompareResult(
+            'test_table',
+            CompareResult::OPERATION_UPDATE,
+            [],
+            [],
+            [],
+            []
+        );
+
+        $result = $generator->generate($compareResult);
+
+        $this->assertEquals([], $result);
+    }
+
+    #[AllowMockObjectsWithoutExpectations]
+    public function testRollbackFiltersOutEmptyCreateTableFromRollbackStatement(): void
+    {
+        $generator = new EmptyStatementMigrationGenerator($this->typeRegistry);
+        $compareResult = new TableCompareResult(
+            'test_table',
+            CompareResult::OPERATION_DELETE,
+            [],
+            [],
+            [],
+            []
+        );
+
+        $result = $generator->rollback($compareResult);
+
+        $this->assertEquals([], $result);
+    }
+
+    #[AllowMockObjectsWithoutExpectations]
+    public function testRollbackFiltersOutEmptyAlterTableRollbackStatement(): void
+    {
+        $generator = new EmptyStatementMigrationGenerator($this->typeRegistry);
+        $compareResult = new TableCompareResult(
+            'test_table',
+            CompareResult::OPERATION_UPDATE,
+            [],
+            [],
+            [],
+            []
+        );
+
+        $result = $generator->rollback($compareResult);
+
+        $this->assertEquals([], $result);
+    }
+
+    public function testColumnDefinitionEscapesSingleQuoteInDefaultValue(): void
+    {
+        $column = new PropertiesData(
+            type: 'string',
+            isNullable: false,
+            defaultValue: "O'Brien",
+            isPrimaryKey: false,
+            isAutoIncrement: false
+        );
+
+        $this->typeRegistry->expects($this->once())
+            ->method('getDatabaseType')
+            ->with('string')
+            ->willReturn('VARCHAR(255)');
+
+        $result = $this->generator->testColumnDefinition('name', $column);
+
+        $this->assertEquals("\"name\" VARCHAR(255) NOT NULL DEFAULT 'O''Brien'", $result);
+    }
+
+    #[AllowMockObjectsWithoutExpectations]
+    public function testGenerateIndexSqlUsesConcurrentPrefixWhenConcurrent(): void
+    {
+        $generator = new EmptyStatementMigrationGenerator($this->typeRegistry);
+        $index = new IndexCompareResult(
+            'idx_name',
+            CompareResult::OPERATION_CREATE,
+            ['name'],
+            false,
+            true
+        );
+
+        $reflection = new \ReflectionClass($generator);
+        $method = $reflection->getMethod('generateIndexSql');
+        $method->setAccessible(true);
+        $result = $method->invoke($generator, $index, 'users', true);
+
+        $this->assertEquals('ADD CONCURRENT INDEX "idx_name" ("name")', $result);
+    }
 }
 
 /**
- * Test implementation of AbstractMigrationGenerator for testing.
+ * Test implementation whose alter/rollback hooks return empty strings so the
+ * array_filter() calls around generate()/rollback() actually drop entries.
  */
+class EmptyStatementMigrationGenerator extends AbstractMigrationGenerator {
+    public function getIdentifierQuote(): string
+    {
+        return '"';
+    }
+
+    protected function generateDropTable(string $tableName): string
+    {
+        return '';
+    }
+
+    protected function generateCreateTable(TableCompareResult $compareResult): string
+    {
+        return '';
+    }
+
+    protected function generateAlterTable(TableCompareResult $compareResult): string
+    {
+        return '';
+    }
+
+    protected function generateAlterTableRollback(TableCompareResult $compareResult): string
+    {
+        return '';
+    }
+
+    protected function generateCreateTableFromRollback(TableCompareResult $compareResult): string
+    {
+        return '';
+    }
+
+    protected function getForeignKeyKeyword(): string
+    {
+        return 'CONSTRAINT';
+    }
+
+    protected function getDropForeignKeySyntax(string $constraintName): string
+    {
+        return '';
+    }
+
+    protected function getDropIndexSyntax(string $indexName): string
+    {
+        return '';
+    }
+
+    protected function getModifyColumnSyntax(string $columnName, PropertiesData $column): string
+    {
+        return '';
+    }
+
+    protected function getPrimaryKeyGenerationSql(string $generatorType, ?string $sequence = null): string
+    {
+        return '';
+    }
+
+    protected function getAutoIncrementSql(): string
+    {
+        return '';
+    }
+
+    protected function getConcurrentIndexPrefix(): string
+    {
+        return 'CONCURRENT ';
+    }
+}
 class TestMigrationGenerator extends AbstractMigrationGenerator {
     public function getIdentifierQuote(): string
     {

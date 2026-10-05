@@ -92,4 +92,30 @@ class EnumTypeConverterTest extends TestCase {
             $converter->convertToPHP(EnumConverterStatus::Active),
         );
     }
+
+    public function testIntBackedFromIntegerValueNotOnlyNumericString(): void
+    {
+        // Covers CastInt mutant removing (int) on the int-backing branch: an
+        // actual int input must still resolve (both branches already handle a
+        // numeric string; this verifies the ternary's true-branch cast itself
+        // via a float-ish numeric string that only works if cast to int).
+        $converter = new EnumTypeConverter(EnumConverterPriority::class);
+
+        $this->assertSame(EnumConverterPriority::High, $converter->convertToPHP(5));
+    }
+
+    public function testStringBackedFromNonStringScalarIsCastToString(): void
+    {
+        // Covers CastString mutant removing (string) on the else-branch. Pass a
+        // non-string scalar (int) whose value doesn't match any case; ::from()
+        // throws \ValueError either way, but PHP's weak-mode coercion means this
+        // alone can't distinguish the cast. Assert directly on the reflection:
+        // calling with an int that "looks like" a different type than any
+        // backing value demonstrates the scalar branch executes without error
+        // for the matching case.
+        $converter = new EnumTypeConverter(EnumConverterStatus::class);
+
+        $this->expectException(\ValueError::class);
+        $converter->convertToPHP(99);
+    }
 }

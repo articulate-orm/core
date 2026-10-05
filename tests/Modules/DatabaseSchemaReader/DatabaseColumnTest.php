@@ -62,4 +62,34 @@ class DatabaseColumnTest extends AbstractTestCase {
         $this->assertNull($column->length);
         $this->assertTrue($column->isNullable);
     }
+
+    public function testCommaParameterizedTypeUsesOnlyFirstPartAsLength(): void
+    {
+        // Covers NotIdentical mutant on strpos($params, ',') !== false -> === false,
+        // and the UnwrapTrim/CastInt mutants on (int) trim($paramParts[0]).
+        $column = new DatabaseColumn('price', 'NUMERIC(10,2)', false, null);
+
+        $this->assertEquals('NUMERIC', $column->type);
+        $this->assertEquals(10, $column->length);
+        $this->assertIsInt($column->length);
+    }
+
+    public function testCommaParameterizedTypeTrimsWhitespaceAroundLength(): void
+    {
+        $column = new DatabaseColumn('price', 'DECIMAL( 10 ,2)', false, null);
+
+        $this->assertEquals(10, $column->length);
+    }
+
+    public function testParameterizedTypeRequiresClosingParenAtEndOfString(): void
+    {
+        // Covers PregMatchRemoveDollar: without the trailing $ anchor, a type string
+        // with trailing content after the closing paren would incorrectly be treated
+        // as parameterized. "VARCHAR(255) extra" must fall through to the plain-type
+        // branch (length null, type kept verbatim) because of the anchor.
+        $column = new DatabaseColumn('weird', 'VARCHAR(255) extra', false, null);
+
+        $this->assertNull($column->length);
+        $this->assertEquals('VARCHAR(255) extra', $column->type);
+    }
 }

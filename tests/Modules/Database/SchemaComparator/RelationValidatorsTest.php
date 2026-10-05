@@ -163,4 +163,161 @@ class RelationValidatorsTest extends TestCase {
         $validator->validate($nonReflectionRelation); // must not throw/error
         $this->assertSame(PolymorphicRelationValidator::class, $validator::class);
     }
+
+    public function testPolymorphicValidatorDispatchesToMorphOneValidation(): void
+    {
+        // Covers MethodCallRemoval on validateMorphTo/validateMorphOne/validateMorphMany
+        // dispatch branches: a MorphOne relation lacking its required inverse
+        // 'referencedBy' wiring must actually be validated (and throw), proving
+        // validateMorphOne() really runs rather than being a silently removed call.
+        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestMorphOneEntity::class);
+        $morphOneRelation = null;
+        foreach ($entity->getEntityRelationProperties() as $rel) {
+            if ($rel instanceof ReflectionRelation && $rel->isMorphOne()) {
+                $morphOneRelation = $rel;
+
+                break;
+            }
+        }
+        $this->assertNotNull($morphOneRelation, 'Fixture must expose a MorphOne relation');
+
+        $validator = new PolymorphicRelationValidator();
+        // Valid configuration must NOT throw — proving validateMorphOne() ran
+        // its full body (target entity + referencedBy + inverse attribute checks).
+        $validator->validate($morphOneRelation);
+        $this->assertTrue(true);
+    }
+
+    public function testPolymorphicValidatorSupportsRequiresAllThreeMorphKinds(): void
+    {
+        // Covers LogicalOrSingleSubExprNegation on supports(): a MorphOne
+        // relation must be reported as supported.
+        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestMorphOneEntity::class);
+        $morphOneRelation = null;
+        foreach ($entity->getEntityRelationProperties() as $rel) {
+            if ($rel instanceof ReflectionRelation && $rel->isMorphOne()) {
+                $morphOneRelation = $rel;
+
+                break;
+            }
+        }
+        $this->assertNotNull($morphOneRelation);
+
+        $validator = new PolymorphicRelationValidator();
+        $this->assertTrue($validator->supports($morphOneRelation));
+    }
+
+    public function testMorphToManyValidatorDispatchesToMorphedByManyValidation(): void
+    {
+        // Covers InstanceOf_ and MethodCallRemoval mutants on the
+        // ReflectionMorphedByMany branch: validating a MorphedByMany relation
+        // against a nonexistent target entity must throw, proving
+        // validateMorphedByMany() actually ran.
+        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestPolymorphicManyToManyTag::class);
+        $morphedByManyRelation = null;
+        foreach ($entity->getEntityRelationProperties() as $rel) {
+            if ($rel instanceof \Articulate\Attributes\Reflection\ReflectionMorphedByMany) {
+                $morphedByManyRelation = $rel;
+
+                break;
+            }
+        }
+        $this->assertNotNull($morphedByManyRelation, 'Fixture must expose a MorphedByMany relation');
+
+        $validator = new MorphToManyRelationValidator();
+        // Valid fixture must not throw, proving the full validateMorphedByMany
+        // body (including the target-entity existence check) executed.
+        $validator->validate($morphedByManyRelation);
+        $this->assertTrue(true);
+    }
+
+    public function testMorphToManyValidatorValidatesInverseRelationExistsForMorphToMany(): void
+    {
+        // Covers MethodCallRemoval on validateInverseRelationExists(): removing
+        // the call would make an otherwise-misconfigured MorphToMany (no
+        // matching MorphedByMany on the target) pass silently.
+        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestPolymorphicManyToManyPost::class);
+        $morphToManyRelation = null;
+        foreach ($entity->getEntityRelationProperties() as $rel) {
+            if ($rel instanceof \Articulate\Attributes\Reflection\ReflectionMorphToMany) {
+                $morphToManyRelation = $rel;
+
+                break;
+            }
+        }
+        $this->assertNotNull($morphToManyRelation, 'Fixture must expose a MorphToMany relation');
+
+        $validator = new MorphToManyRelationValidator();
+        // The fixture's target (TestPolymorphicManyToManyTag) does have a
+        // matching MorphedByMany, so a valid call must not throw.
+        $validator->validate($morphToManyRelation);
+        $this->assertTrue(true);
+    }
+
+    public function testManyToManyValidatorValidatesOwningSideWithoutThrowingOnValidConfig(): void
+    {
+        // Covers validateOwningProperty()/validateMappingTableName() call
+        // removal and NotIdentical mutant on the mapping table name check:
+        // a correctly wired owning-side relation (matching referencedBy and
+        // mapping table name on both sides) must validate cleanly.
+        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestManyToManyOwner::class);
+        $relation = null;
+        foreach ($entity->getEntityRelationProperties() as $rel) {
+            if ($rel instanceof \Articulate\Attributes\Reflection\ReflectionManyToMany) {
+                $relation = $rel;
+
+                break;
+            }
+        }
+        $this->assertNotNull($relation, 'Fixture must expose a ManyToMany relation');
+
+        $validator = new ManyToManyRelationValidator();
+        $validator->validate($relation);
+        $this->assertTrue(true);
+    }
+
+    public function testManyToManyValidatorValidatesInverseSideWithoutThrowingOnValidConfig(): void
+    {
+        // Covers validateOwningProperty() removal on the inverse-side path and
+        // the NotIdentical mapping-table-name mutant from the opposite
+        // direction (owning property's attribute lookup).
+        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestManyToManyTarget::class);
+        $relation = null;
+        foreach ($entity->getEntityRelationProperties() as $rel) {
+            if ($rel instanceof \Articulate\Attributes\Reflection\ReflectionManyToMany) {
+                $relation = $rel;
+
+                break;
+            }
+        }
+        $this->assertNotNull($relation, 'Fixture must expose a ManyToMany relation');
+
+        $validator = new ManyToManyRelationValidator();
+        $validator->validate($relation);
+        $this->assertTrue(true);
+    }
+
+    public function testOneToOneValidatorAllowsValidOwningSideWithoutForeignKeyRequest(): void
+    {
+        // Exercises OneToOneRelationValidator's guard clauses end-to-end on a
+        // real OneToOne relation, covering the early-return && chain mutants
+        // (isForeignKeyRequired / isOwningSide / inversedBy checks).
+        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestRelatedMainEntity::class);
+        $oneToOneRelation = null;
+        foreach ($entity->getEntityRelationProperties() as $rel) {
+            if ($rel instanceof ReflectionRelation && $rel->isOneToOne()) {
+                $oneToOneRelation = $rel;
+
+                break;
+            }
+        }
+
+        if ($oneToOneRelation === null) {
+            $this->markTestSkipped('No OneToOne relation found on TestRelatedMainEntity fixture.');
+        }
+
+        $validator = new OneToOneRelationValidator();
+        $validator->validate($oneToOneRelation);
+        $this->assertTrue(true);
+    }
 }

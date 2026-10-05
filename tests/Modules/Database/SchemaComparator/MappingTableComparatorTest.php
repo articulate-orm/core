@@ -859,6 +859,142 @@ class MappingTableComparatorTest extends TestCase {
 
         $this->fail("Column {$name} not found in compare result.");
     }
+
+    public function testCompareManyToManyTableDeletesAllStaleForeignKeys(): void
+    {
+        $definition = [
+            'tableName' => 'user_roles',
+            'ownerTable' => 'users',
+            'targetTable' => 'roles',
+            'ownerJoinColumn' => 'user_id',
+            'targetJoinColumn' => 'role_id',
+            'ownerReferencedColumn' => 'id',
+            'targetReferencedColumn' => 'id',
+            'extraProperties' => [],
+            'primaryColumns' => ['user_id', 'role_id'],
+        ];
+
+        $existingTables = ['user_roles', 'users', 'roles'];
+
+        $this->databaseSchemaReader->method('getTableColumns')
+            ->willReturn([
+                (object) ['name' => 'user_id', 'type' => 'int', 'isNullable' => false, 'defaultValue' => null, 'length' => null],
+                (object) ['name' => 'role_id', 'type' => 'int', 'isNullable' => false, 'defaultValue' => null, 'length' => null],
+            ]);
+
+        // Both foreign keys are stale (don't match desired FK names) so both must be removed.
+        $this->databaseSchemaReader->method('getTableForeignKeys')
+            ->willReturn([
+                'fk_legacy_one' => ['column' => 'user_id', 'referencedTable' => 'users', 'referencedColumn' => 'id'],
+                'fk_legacy_two' => ['column' => 'role_id', 'referencedTable' => 'roles', 'referencedColumn' => 'id'],
+            ]);
+
+        $this->databaseSchemaReader->method('getTableIndexes')->willReturn([]);
+
+        $result = $this->comparator->compareManyToManyTable($definition, $existingTables);
+
+        $this->assertInstanceOf(TableCompareResult::class, $result);
+        // 2 legacy FKs deleted + 2 desired FKs created = 4 total
+        $this->assertCount(4, $result->foreignKeys);
+        $deleted = array_filter($result->foreignKeys, fn ($fk) => $fk->operation === CompareResult::OPERATION_DELETE);
+        $this->assertCount(2, $deleted);
+        $deletedNames = array_map(fn ($fk) => $fk->name, $deleted);
+        $this->assertContains('fk_legacy_one', $deletedNames);
+        $this->assertContains('fk_legacy_two', $deletedNames);
+    }
+
+    public function testCompareManyToManyTableRemovesAllStaleIndexesNotJustFirst(): void
+    {
+        $definition = [
+            'tableName' => 'user_roles',
+            'ownerTable' => 'users',
+            'targetTable' => 'roles',
+            'ownerJoinColumn' => 'user_id',
+            'targetJoinColumn' => 'role_id',
+            'ownerReferencedColumn' => 'id',
+            'targetReferencedColumn' => 'id',
+            'extraProperties' => [],
+            'primaryColumns' => ['user_id', 'role_id'],
+        ];
+
+        $existingTables = ['user_roles', 'users', 'roles'];
+
+        $this->databaseSchemaReader->method('getTableColumns')
+            ->willReturn([
+                (object) ['name' => 'user_id', 'type' => 'int', 'isNullable' => false, 'defaultValue' => null, 'length' => null],
+                (object) ['name' => 'role_id', 'type' => 'int', 'isNullable' => false, 'defaultValue' => null, 'length' => null],
+            ]);
+
+        $this->databaseSchemaReader->method('getTableForeignKeys')
+            ->willReturn([
+                'fk_user_roles_user_id' => ['column' => 'user_id', 'referencedTable' => 'users', 'referencedColumn' => 'id'],
+                'fk_user_roles_role_id' => ['column' => 'role_id', 'referencedTable' => 'roles', 'referencedColumn' => 'id'],
+            ]);
+
+        // Two unrelated indexes (not primary-key-backed, not single-FK-column-backed)
+        // that should both be flagged for deletion.
+        $this->databaseSchemaReader->method('getTableIndexes')
+            ->willReturn([
+                'idx_stale_one' => ['columns' => ['user_id', 'created_at'], 'unique' => false],
+                'idx_stale_two' => ['columns' => ['role_id', 'created_at'], 'unique' => false],
+            ]);
+
+        $result = $this->comparator->compareManyToManyTable($definition, $existingTables);
+
+        $this->assertInstanceOf(TableCompareResult::class, $result);
+        $this->assertCount(2, $result->indexes);
+        $indexNames = array_map(fn ($index) => $index->name, $result->indexes);
+        $this->assertContains('idx_stale_one', $indexNames);
+        $this->assertContains('idx_stale_two', $indexNames);
+        foreach ($result->indexes as $index) {
+            $this->assertEquals(CompareResult::OPERATION_DELETE, $index->operation);
+        }
+    }
+
+    public function testCompareMorphToManyTableDeletesAllStaleForeignKeysNotJustFirst(): void
+    {
+        $definition = [
+            'tableName' => 'taggables',
+            'morphName' => 'taggable',
+            'typeColumn' => 'taggable_type',
+            'idColumn' => 'taggable_id',
+            'targetColumn' => 'tag_id',
+            'targetTable' => 'tags',
+            'targetReferencedColumn' => 'id',
+            'extraProperties' => [],
+            'primaryColumns' => ['taggable_type', 'taggable_id', 'tag_id'],
+            'relations' => [],
+        ];
+
+        $existingTables = ['taggables', 'tags'];
+
+        $this->databaseSchemaReader->method('getTableColumns')
+            ->willReturn([
+                (object) ['name' => 'taggable_type', 'type' => 'string', 'isNullable' => false, 'defaultValue' => null, 'length' => 255],
+                (object) ['name' => 'taggable_id', 'type' => 'int', 'isNullable' => false, 'defaultValue' => null, 'length' => null],
+                (object) ['name' => 'tag_id', 'type' => 'int', 'isNullable' => false, 'defaultValue' => null, 'length' => null],
+            ]);
+
+        $this->databaseSchemaReader->method('getTableForeignKeys')
+            ->willReturn([
+                'fk_legacy_one' => ['column' => 'tag_id', 'referencedTable' => 'tags', 'referencedColumn' => 'id'],
+                'fk_legacy_two' => ['column' => 'taggable_id', 'referencedTable' => 'tags', 'referencedColumn' => 'id'],
+            ]);
+
+        $this->databaseSchemaReader->method('getTableIndexes')
+            ->willReturn([
+                'taggable_type_taggable_id_index' => ['columns' => ['taggable_type', 'taggable_id'], 'unique' => false],
+            ]);
+
+        $result = $this->comparator->compareMorphToManyTable($definition, $existingTables);
+
+        $this->assertInstanceOf(TableCompareResult::class, $result);
+        $deleted = array_filter($result->foreignKeys, fn ($fk) => $fk->operation === CompareResult::OPERATION_DELETE);
+        $this->assertCount(2, $deleted);
+        $deletedNames = array_map(fn ($fk) => $fk->name, $deleted);
+        $this->assertContains('fk_legacy_one', $deletedNames);
+        $this->assertContains('fk_legacy_two', $deletedNames);
+    }
 }
 
 class MorphOwnerWithStringPk {

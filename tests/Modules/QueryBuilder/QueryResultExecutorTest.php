@@ -402,6 +402,10 @@ class QueryResultExecutorTest extends TestCase {
      * exercising the "impossible" null branch would require reflection to desync internal
      * invariants, which doesn't test real behavior.
      */
+}
+
+#[Entity]
+class QueryResultExecutorTestEntity {
     #[PrimaryKey]
     public int $id;
 

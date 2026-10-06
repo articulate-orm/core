@@ -2,6 +2,9 @@
 
 Context-bounded ORM for modular PHP applications that share database tables across modules.
 
+> **Using an AI coding assistant?** Point it at [`AI.md`](./AI.md) for a
+> compact, agent-oriented summary of how to use this library correctly.
+
 ## Why Articulate?
 
 Most ORMs make the table/entity boundary the modeling boundary: one table, one primary entity class. In modular systems, that turns shared tables into shared domain objects.

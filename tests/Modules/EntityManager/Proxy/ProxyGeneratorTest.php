@@ -10,6 +10,7 @@ use Articulate\Modules\EntityManager\EntityManager;
 use Articulate\Modules\EntityManager\Proxy\ProxyGenerator;
 use Articulate\Modules\EntityManager\Proxy\ProxyInterface;
 use Articulate\Modules\EntityManager\Proxy\ProxyManager;
+use Articulate\Schema\EntityMetadata;
 use Articulate\Schema\EntityMetadataRegistry;
 use PHPUnit\Framework\TestCase;
 
@@ -555,7 +556,7 @@ class ProxyGeneratorTest extends TestCase {
         // identifiers, so we fake metadata (via mocks — metadata lookup is pure
         // schema data, not DB access) with an invalid property name to force
         // the loop to actually matter.
-        $metadata = $this->createMock(\Articulate\Schema\EntityMetadata::class);
+        $metadata = $this->createMock(EntityMetadata::class);
         $metadata->method('getProperties')->willReturn(['1invalid' => null]);
         $metadata->method('getRelations')->willReturn([]);
 
@@ -573,7 +574,7 @@ class ProxyGeneratorTest extends TestCase {
     {
         // Same as above for the relationProperties validation loop (Foreach_
         // and MethodCallRemoval mutants on lines 169-170).
-        $metadata = $this->createMock(\Articulate\Schema\EntityMetadata::class);
+        $metadata = $this->createMock(EntityMetadata::class);
         $metadata->method('getProperties')->willReturn([]);
         $metadata->method('getRelations')->willReturn(['bad-name' => null]);
 

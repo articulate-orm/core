@@ -5,6 +5,8 @@ namespace Articulate\Tests\Modules\Migrations;
 use Articulate\Modules\Database\PostgresqlTypeMapper;
 use Articulate\Modules\Database\SchemaComparator\Models\ColumnCompareResult;
 use Articulate\Modules\Database\SchemaComparator\Models\CompareResult;
+use Articulate\Modules\Database\SchemaComparator\Models\ForeignKeyCompareResult;
+use Articulate\Modules\Database\SchemaComparator\Models\IndexCompareResult;
 use Articulate\Modules\Database\SchemaComparator\Models\PropertiesData;
 use Articulate\Modules\Database\SchemaComparator\Models\TableCompareResult;
 use Articulate\Modules\Migrations\Generator\PostgresqlMigrationGenerator;
@@ -284,7 +286,7 @@ class PostgresqlMigrationGeneratorTest extends AbstractTestCase {
             operation: CompareResult::OPERATION_DELETE,
             columns: [],
             indexes: [
-                new \Articulate\Modules\Database\SchemaComparator\Models\IndexCompareResult(
+                new IndexCompareResult(
                     'idx_products_sku',
                     CompareResult::OPERATION_DELETE,
                     ['sku'],
@@ -307,14 +309,14 @@ class PostgresqlMigrationGeneratorTest extends AbstractTestCase {
             name: 'posts',
             operation: CompareResult::OPERATION_UPDATE,
             foreignKeys: [
-                new \Articulate\Modules\Database\SchemaComparator\Models\ForeignKeyCompareResult(
+                new ForeignKeyCompareResult(
                     'fk_posts_author_id',
                     CompareResult::OPERATION_CREATE,
                     'author_id',
                     'users',
                     'id',
                 ),
-                new \Articulate\Modules\Database\SchemaComparator\Models\ForeignKeyCompareResult(
+                new ForeignKeyCompareResult(
                     'fk_posts_category_id',
                     CompareResult::OPERATION_CREATE,
                     'category_id',

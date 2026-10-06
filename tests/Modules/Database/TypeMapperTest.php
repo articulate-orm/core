@@ -216,7 +216,7 @@ class TypeMapperTest extends TestCase {
         // swapped coalesce would therefore return 'mixed' instead of Point::class.
         $mapper = new MySqlTypeMapper();
 
-        $this->assertSame(\Articulate\Utils\Point::class, $mapper->getPhpType('POINT'));
+        $this->assertSame(Point::class, $mapper->getPhpType('POINT'));
     }
 
     public function testPostgresqlTypeMapperRegistersNullableDateTimeImmutableType(): void
@@ -244,7 +244,7 @@ class TypeMapperTest extends TestCase {
         // can't force a losing competition through getDatabaseType() alone.
         $mapper = new PostgresqlTypeMapper();
 
-        $reflection = new \ReflectionClass(\Articulate\Utils\TypeRegistry::class);
+        $reflection = new \ReflectionClass(TypeRegistry::class);
         $property = $reflection->getProperty('classMappings');
         $property->setAccessible(true);
         $classMappings = $property->getValue($mapper);

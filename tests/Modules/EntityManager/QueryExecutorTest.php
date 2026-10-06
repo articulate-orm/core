@@ -13,6 +13,7 @@ use Articulate\Connection;
 use Articulate\Modules\EntityManager\QueryExecutor;
 use Articulate\Modules\Generators\GeneratorInterface;
 use Articulate\Modules\Generators\GeneratorRegistry;
+use Articulate\Schema\EntityMetadata;
 use PHPUnit\Framework\TestCase;
 
 #[Entity]
@@ -506,7 +507,7 @@ class QueryExecutorTest extends TestCase {
 
     public function testDeferredVersionReconciliationReturnsNullForEmptyOriginalValues(): void
     {
-        $metadata = new \Articulate\Schema\EntityMetadata(QueryExecutorTestEntity::class);
+        $metadata = new EntityMetadata(QueryExecutorTestEntity::class);
         $entity = new QueryExecutorTestEntity();
         $entity->id = 1;
 
@@ -517,7 +518,7 @@ class QueryExecutorTest extends TestCase {
 
     public function testDeferredVersionReconciliationReturnsBumpForNonEmptyOriginalValues(): void
     {
-        $metadata = new \Articulate\Schema\EntityMetadata(QueryExecutorTestEntity::class);
+        $metadata = new EntityMetadata(QueryExecutorTestEntity::class);
         $entity = new QueryExecutorTestEntity();
         $entity->id = 1;
 
@@ -528,7 +529,7 @@ class QueryExecutorTest extends TestCase {
 
     public function testGetVersionColumnValueUsesNullSafeCallWhenPropertyIsMissing(): void
     {
-        $metadata = new \Articulate\Schema\EntityMetadata(QueryExecutorTestEntity::class);
+        $metadata = new EntityMetadata(QueryExecutorTestEntity::class);
         $entity = new QueryExecutorTestEntity();
         $entity->id = 1;
 

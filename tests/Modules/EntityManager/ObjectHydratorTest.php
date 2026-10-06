@@ -7,7 +7,6 @@ use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Property;
 use Articulate\Attributes\Relations\OneToMany;
 use Articulate\Modules\EntityManager\Collection;
-use Articulate\Modules\EntityManager\LazyCollection;
 use Articulate\Modules\EntityManager\ObjectHydrator;
 use Articulate\Modules\EntityManager\RelationshipLoader;
 use Articulate\Modules\EntityManager\UnitOfWork;

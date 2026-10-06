@@ -2,7 +2,6 @@
 
 namespace Articulate\Tests\Modules\QueryBuilder;
 
-use Articulate\Connection;
 use Articulate\Modules\QueryBuilder\Cursor;
 use Articulate\Modules\QueryBuilder\CursorDirection;
 use Articulate\Modules\QueryBuilder\SqlCompiler;

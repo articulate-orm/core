@@ -6,7 +6,9 @@ use Articulate\Attributes\Entity;
 use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Property;
 use Articulate\Attributes\Relations\OneToMany;
+use Articulate\Attributes\VersionAware;
 use Articulate\Schema\EntityMetadata;
+use Articulate\Tests\Attributes\SoftDeleteableDefaultEntity;
 use PHPUnit\Framework\TestCase;
 
 #[Entity(tableName: 'test_users')]
@@ -168,7 +170,7 @@ class EntityMetadataTest extends TestCase {
 
     public function testGetSoftDeleteColumnReturnsColumnNameWhenSoftDeleteable(): void
     {
-        $metadata = new EntityMetadata(\Articulate\Tests\Attributes\SoftDeleteableDefaultEntity::class);
+        $metadata = new EntityMetadata(SoftDeleteableDefaultEntity::class);
 
         $this->assertSame('deleted_at', $metadata->getSoftDeleteColumn());
     }
@@ -194,7 +196,7 @@ class EntityMetadataTest extends TestCase {
 }
 
 #[Entity]
-#[\Articulate\Attributes\VersionAware(['balance_version', 'stock_version'])]
+#[VersionAware(['balance_version', 'stock_version'])]
 class EntityMetadataVersionAwareEntity {
     #[PrimaryKey]
     public int $id;

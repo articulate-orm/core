@@ -2,6 +2,7 @@
 
 namespace Articulate\Tests\Modules\Database\SchemaComparator;
 
+use Articulate\Attributes\Reflection\ReflectionRelation;
 use Articulate\Modules\Database\SchemaComparator\Comparators\IndexComparator;
 use Articulate\Modules\Database\SchemaComparator\Models\CompareResult;
 use PHPUnit\Framework\TestCase;
@@ -21,8 +22,9 @@ class IndexComparatorTest extends TestCase {
 
     public function testCompareIndexesCreatesNewIndexDefaultingConcurrentToFalse(): void
     {
-        $indexInstance = new class {
+        $indexInstance = new class() {
             public array $columns = ['email'];
+
             public bool $unique = true;
         };
 
@@ -44,8 +46,9 @@ class IndexComparatorTest extends TestCase {
 
     public function testCompareIndexesUnsetsRemovalFlagForExistingIndex(): void
     {
-        $indexInstance = new class {
+        $indexInstance = new class() {
             public array $columns = ['email'];
+
             public bool $unique = true;
         };
 
@@ -116,7 +119,7 @@ class IndexComparatorTest extends TestCase {
 
     public function testAddPolymorphicIndexAddsIndexWithExpectedNameAndColumns(): void
     {
-        $relation = $this->createStub(\Articulate\Attributes\Reflection\ReflectionRelation::class);
+        $relation = $this->createStub(ReflectionRelation::class);
         $relation->method('getPropertyName')->willReturn('commentable');
         $relation->method('getMorphTypeColumnName')->willReturn('commentable_type');
         $relation->method('getMorphIdColumnName')->willReturn('commentable_id');

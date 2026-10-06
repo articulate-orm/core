@@ -9,6 +9,7 @@ use Articulate\Connection;
 use Articulate\Exceptions\TransactionRequiredException;
 use Articulate\Modules\QueryBuilder\QueryResultCache;
 use Articulate\Modules\QueryBuilder\QueryResultExecutor;
+use Articulate\Schema\EntityMetadata;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Schema\HydratorInterface;
 use Articulate\Schema\ManagedEntityStoreInterface;
@@ -362,7 +363,7 @@ class QueryResultExecutorTest extends TestCase {
         $managedEntityStore->expects($this->once())->method('registerManaged');
 
         $metadataRegistry = $this->createMock(EntityMetadataRegistry::class);
-        $metadata = $this->createMock(\Articulate\Schema\EntityMetadata::class);
+        $metadata = $this->createMock(EntityMetadata::class);
         $metadata->method('getPrimaryKeyColumns')->willReturn([]);
         $metadataRegistry->method('getMetadata')->willReturn($metadata);
 
@@ -392,7 +393,7 @@ class QueryResultExecutorTest extends TestCase {
         $this->assertSame([$hydratedEntity], $result);
     }
 
-    /**
+    /*
      * Mutant: NullSafeMethodCall → direct method call on
      * `$this->managedEntityStore?->tryGetById(...)` (QueryResultExecutor.php:149). This path is
      * only reached when $metadata !== null, which itself requires $managedEntityStore !== null

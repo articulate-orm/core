@@ -1014,7 +1014,7 @@ class QueryBuilderTest extends DatabaseTestCase {
     {
         $connection = $this->createStub(Connection::class);
         $qb = new QueryBuilder($connection);
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $qb->orderBy('invalid!field', 'ASC');
     }
 

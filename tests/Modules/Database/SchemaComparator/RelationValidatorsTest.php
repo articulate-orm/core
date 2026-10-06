@@ -5,6 +5,9 @@ namespace Articulate\Tests\Modules\Database\SchemaComparator;
 use Articulate\Attributes\Entity;
 use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Reflection\ReflectionEntity;
+use Articulate\Attributes\Reflection\ReflectionManyToMany;
+use Articulate\Attributes\Reflection\ReflectionMorphedByMany;
+use Articulate\Attributes\Reflection\ReflectionMorphToMany;
 use Articulate\Attributes\Reflection\ReflectionRelation;
 use Articulate\Attributes\Reflection\RelationInterface;
 use Articulate\Attributes\Relations\ManyToOne;
@@ -16,6 +19,12 @@ use Articulate\Modules\Database\SchemaComparator\RelationValidators\OneToManyRel
 use Articulate\Modules\Database\SchemaComparator\RelationValidators\OneToOneRelationValidator;
 use Articulate\Modules\Database\SchemaComparator\RelationValidators\PolymorphicRelationValidator;
 use Articulate\Modules\Database\SchemaComparator\RelationValidators\RelationValidatorFactory;
+use Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestManyToManyOwner;
+use Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestManyToManyTarget;
+use Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestMorphOneEntity;
+use Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestPolymorphicManyToManyPost;
+use Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestPolymorphicManyToManyTag;
+use Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestRelatedMainEntity;
 use PHPUnit\Framework\TestCase;
 
 // Entity fixtures for validator guard-clause tests
@@ -170,7 +179,7 @@ class RelationValidatorsTest extends TestCase {
         // dispatch branches: a MorphOne relation lacking its required inverse
         // 'referencedBy' wiring must actually be validated (and throw), proving
         // validateMorphOne() really runs rather than being a silently removed call.
-        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestMorphOneEntity::class);
+        $entity = new ReflectionEntity(TestMorphOneEntity::class);
         $morphOneRelation = null;
         foreach ($entity->getEntityRelationProperties() as $rel) {
             if ($rel instanceof ReflectionRelation && $rel->isMorphOne()) {
@@ -192,7 +201,7 @@ class RelationValidatorsTest extends TestCase {
     {
         // Covers LogicalOrSingleSubExprNegation on supports(): a MorphOne
         // relation must be reported as supported.
-        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestMorphOneEntity::class);
+        $entity = new ReflectionEntity(TestMorphOneEntity::class);
         $morphOneRelation = null;
         foreach ($entity->getEntityRelationProperties() as $rel) {
             if ($rel instanceof ReflectionRelation && $rel->isMorphOne()) {
@@ -213,10 +222,10 @@ class RelationValidatorsTest extends TestCase {
         // ReflectionMorphedByMany branch: validating a MorphedByMany relation
         // against a nonexistent target entity must throw, proving
         // validateMorphedByMany() actually ran.
-        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestPolymorphicManyToManyTag::class);
+        $entity = new ReflectionEntity(TestPolymorphicManyToManyTag::class);
         $morphedByManyRelation = null;
         foreach ($entity->getEntityRelationProperties() as $rel) {
-            if ($rel instanceof \Articulate\Attributes\Reflection\ReflectionMorphedByMany) {
+            if ($rel instanceof ReflectionMorphedByMany) {
                 $morphedByManyRelation = $rel;
 
                 break;
@@ -236,10 +245,10 @@ class RelationValidatorsTest extends TestCase {
         // Covers MethodCallRemoval on validateInverseRelationExists(): removing
         // the call would make an otherwise-misconfigured MorphToMany (no
         // matching MorphedByMany on the target) pass silently.
-        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestPolymorphicManyToManyPost::class);
+        $entity = new ReflectionEntity(TestPolymorphicManyToManyPost::class);
         $morphToManyRelation = null;
         foreach ($entity->getEntityRelationProperties() as $rel) {
-            if ($rel instanceof \Articulate\Attributes\Reflection\ReflectionMorphToMany) {
+            if ($rel instanceof ReflectionMorphToMany) {
                 $morphToManyRelation = $rel;
 
                 break;
@@ -260,10 +269,10 @@ class RelationValidatorsTest extends TestCase {
         // removal and NotIdentical mutant on the mapping table name check:
         // a correctly wired owning-side relation (matching referencedBy and
         // mapping table name on both sides) must validate cleanly.
-        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestManyToManyOwner::class);
+        $entity = new ReflectionEntity(TestManyToManyOwner::class);
         $relation = null;
         foreach ($entity->getEntityRelationProperties() as $rel) {
-            if ($rel instanceof \Articulate\Attributes\Reflection\ReflectionManyToMany) {
+            if ($rel instanceof ReflectionManyToMany) {
                 $relation = $rel;
 
                 break;
@@ -281,10 +290,10 @@ class RelationValidatorsTest extends TestCase {
         // Covers validateOwningProperty() removal on the inverse-side path and
         // the NotIdentical mapping-table-name mutant from the opposite
         // direction (owning property's attribute lookup).
-        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestManyToManyTarget::class);
+        $entity = new ReflectionEntity(TestManyToManyTarget::class);
         $relation = null;
         foreach ($entity->getEntityRelationProperties() as $rel) {
-            if ($rel instanceof \Articulate\Attributes\Reflection\ReflectionManyToMany) {
+            if ($rel instanceof ReflectionManyToMany) {
                 $relation = $rel;
 
                 break;
@@ -302,7 +311,7 @@ class RelationValidatorsTest extends TestCase {
         // Exercises OneToOneRelationValidator's guard clauses end-to-end on a
         // real OneToOne relation, covering the early-return && chain mutants
         // (isForeignKeyRequired / isOwningSide / inversedBy checks).
-        $entity = new ReflectionEntity(\Articulate\Tests\Modules\DatabaseSchemaComparator\TestEntities\TestRelatedMainEntity::class);
+        $entity = new ReflectionEntity(TestRelatedMainEntity::class);
         $oneToOneRelation = null;
         foreach ($entity->getEntityRelationProperties() as $rel) {
             if ($rel instanceof ReflectionRelation && $rel->isOneToOne()) {

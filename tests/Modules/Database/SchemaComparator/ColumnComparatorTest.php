@@ -1424,7 +1424,7 @@ class ColumnComparatorTest extends TestCase {
     }
 
     /**
-     * Line 262: `'generatorType' => $existing['generatorType'] ?? $incoming['generatorType']`
+     * Line 262: `'generatorType' => $existing['generatorType'] ?? $incoming['generatorType']`.
      */
     public function testMergeColumnPropertiesGeneratorTypePrefersExistingWhenBothSet(): void
     {
@@ -1447,7 +1447,7 @@ class ColumnComparatorTest extends TestCase {
     }
 
     /**
-     * Line 263: `'sequence' => $existing['sequence'] ?? $incoming['sequence']`
+     * Line 263: `'sequence' => $existing['sequence'] ?? $incoming['sequence']`.
      */
     public function testMergeColumnPropertiesSequencePrefersExistingWhenBothSet(): void
     {

@@ -354,6 +354,7 @@ class AbstractMigrationGeneratorTest extends AbstractTestCase {
 
         $this->assertEquals('', $result);
     }
+
     #[AllowMockObjectsWithoutExpectations]
     public function testGenerateFiltersOutEmptyAlterStatement(): void
     {

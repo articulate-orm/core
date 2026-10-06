@@ -4,12 +4,16 @@ namespace Articulate\Tests\Modules\EntityManager;
 
 use Articulate\Attributes\Entity;
 use Articulate\Attributes\Indexes\PrimaryKey;
+use Articulate\Attributes\Lifecycle\PostRemove;
+use Articulate\Attributes\Lifecycle\PreUpdate;
 use Articulate\Attributes\Property;
 use Articulate\Attributes\Relations\ManyToMany;
 use Articulate\Attributes\Relations\ManyToOne;
+use Articulate\Attributes\Relations\MorphTo;
 use Articulate\Attributes\Relations\OneToMany;
 use Articulate\Attributes\SoftDeleteable;
 use Articulate\Exceptions\ScheduleConflictException;
+use Articulate\Modules\EntityManager\ChangeTrackingStrategy;
 use Articulate\Modules\EntityManager\Collection;
 use Articulate\Modules\EntityManager\DeferredImplicitStrategy;
 use Articulate\Modules\EntityManager\EntityState;
@@ -888,7 +892,7 @@ class UnitOfWorkPreUpdateCallbackEntity {
     #[Property]
     public string $name;
 
-    #[\Articulate\Attributes\Lifecycle\PreUpdate]
+    #[PreUpdate]
     public function onPreUpdate(): void
     {
         self::$preUpdateCallCount++;
@@ -905,14 +909,14 @@ class UnitOfWorkPostRemoveCallbackEntity {
     #[Property]
     public string $name;
 
-    #[\Articulate\Attributes\Lifecycle\PostRemove]
+    #[PostRemove]
     public function onPostRemove(): void
     {
         self::$postRemoveCallCount++;
     }
 }
 
-class RecordingUntrackStrategy implements \Articulate\Modules\EntityManager\ChangeTrackingStrategy {
+class RecordingUntrackStrategy implements ChangeTrackingStrategy {
     public bool $untracked = false;
 
     public function __construct(private readonly EntityMetadataRegistry $registry)
@@ -959,6 +963,6 @@ class UnitOfWorkMorphToOwner {
     #[Property]
     public string $name;
 
-    #[\Articulate\Attributes\Relations\MorphTo]
+    #[MorphTo]
     public ?UnitOfWorkMorphToTarget $commentable = null;
 }

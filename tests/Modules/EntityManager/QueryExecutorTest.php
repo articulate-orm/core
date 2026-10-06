@@ -5,6 +5,7 @@ namespace Articulate\Tests\Modules\EntityManager;
 use Articulate\Attributes\Entity;
 use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Property;
+use Articulate\Attributes\Reflection\ReflectionEntity;
 use Articulate\Attributes\Relations\ManyToOne;
 use Articulate\Attributes\Relations\MorphTo;
 use Articulate\Attributes\Relations\OneToMany;
@@ -403,7 +404,7 @@ class QueryExecutorPrivateRelationOwner {
  * QueryExecutor reuses an already-cached EntityMetadata instance (`??=`)
  * instead of unconditionally rebuilding it (`=`) every call.
  */
-class QueryExecutorEmptyRelationsMetadata extends \Articulate\Schema\EntityMetadata {
+class QueryExecutorEmptyRelationsMetadata extends EntityMetadata {
     public function getColumnRelations(): array
     {
         return [];
@@ -1171,7 +1172,7 @@ class QueryExecutorTest extends TestCase {
      */
     public function testDeferredVersionReconciliationApplyToleratesUnmappedVersionColumn(): void
     {
-        $metadata = new \Articulate\Schema\EntityMetadata(QueryExecutorTestEntity::class);
+        $metadata = new EntityMetadata(QueryExecutorTestEntity::class);
         $entity = new QueryExecutorTestEntity();
         $entity->id = 1;
 
@@ -1868,7 +1869,7 @@ class QueryExecutorTest extends TestCase {
      */
     public function testGetReflectionEntityReusesStaticCacheInsteadOfRebuildingIt(): void
     {
-        $fakeReflectionEntity = new class(QueryExecutorReflectionCacheProbeEntity::class) extends \Articulate\Attributes\Reflection\ReflectionEntity {
+        $fakeReflectionEntity = new class(QueryExecutorReflectionCacheProbeEntity::class) extends ReflectionEntity {
             public function getTableName(): string
             {
                 return 'cached_stand_in_table';

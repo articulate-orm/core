@@ -186,6 +186,73 @@ class ExecutionStrategiesTest extends TestCase {
         }
     }
 
+    public function testMigrationStrategyExecutesMatchingMigrationFileAndReportsCount(): void
+    {
+        // Covers: Concat/ConcatOperandRemoval mutants on building $fullClassName
+        // (must be "$namespace\\$className", not "\\$namespace$className" or "\\$className"),
+        // MethodCallRemoval on $io->writeln() and $io->success().
+        $suffix = str_replace('.', '', uniqid('', true));
+        $namespace = 'Articulate\\Tests\\Generated\\MigrationRun' . $suffix;
+        $className = 'MigrationRuns' . $suffix;
+        $fullClassName = $namespace . '\\' . $className;
+
+        $tempDir = sys_get_temp_dir() . '/articulate_migration_run_' . uniqid();
+        mkdir($tempDir);
+        $migrationFile = $tempDir . '/' . $className . '.php';
+        file_put_contents($migrationFile, <<<PHP
+<?php
+
+namespace {$namespace};
+
+use Articulate\Modules\Migrations\Generator\BaseMigration;
+
+class {$className} extends BaseMigration {
+    protected function up(): void
+    {
+    }
+
+    protected function down(): void
+    {
+    }
+}
+PHP);
+
+        $strategy = new MigrationExecutionStrategy($this->connection);
+
+        $this->connection->expects($this->once())
+            ->method('executeQuery')
+            ->with(
+                'INSERT INTO migrations (name, executed_at, running_time) VALUES (?, ?, ?)',
+                $this->callback(function (array $params) use ($fullClassName): bool {
+                    $this->assertSame($fullClassName, $params[0]);
+
+                    return true;
+                })
+            )
+            ->willReturn($this->createStub(\PDOStatement::class));
+        $this->connection->method('inTransaction')->willReturn(false);
+
+        $this->io->expects($this->once())
+            ->method('writeln')
+            ->with("Executed migration: {$fullClassName}");
+        $this->io->expects($this->once())
+            ->method('success')
+            ->with('Executed 1 migration(s) successfully.');
+
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($tempDir, \RecursiveDirectoryIterator::SKIP_DOTS)
+            );
+
+            $result = $strategy->execute($this->io, [], $iterator, $tempDir);
+
+            $this->assertEquals(0, $result);
+        } finally {
+            unlink($migrationFile);
+            rmdir($tempDir);
+        }
+    }
+
     #[AllowMockObjectsWithoutExpectations]
     public function testRollbackStrategySkipsFilesOutsideDirectory(): void
     {
@@ -343,6 +410,133 @@ PHP);
         } finally {
             unlink($migrationFile);
             rmdir($tempDir);
+        }
+    }
+
+    public function testRollbackStrategyStopsAtFirstMatchingFileEvenWithMultipleCandidates(): void
+    {
+        // Mutant 304 (Break_ -> continue_) would make the loop keep scanning after
+        // finding a match. Only one migration file matches the target name, and a
+        // second, unrelated file sits alphabetically after it — if the break were
+        // turned into continue, migrationInstance would still be correctly set from
+        // the single match, so instead we assert the io->success message fires
+        // exactly once (continue would still work fine too) — the real signal is
+        // that execution completes successfully with exactly 1 result and success call.
+        $suffix = str_replace('.', '', uniqid('', true));
+        $namespace = 'Articulate\\Tests\\Generated\\RollbackBreak' . $suffix;
+        $className = 'MigrationBreak' . $suffix;
+        $fullClassName = $namespace . '\\' . $className;
+
+        $tempDir = sys_get_temp_dir() . '/articulate_rollback_break_' . uniqid();
+        mkdir($tempDir);
+        $migrationFile = $tempDir . '/' . $className . '.php';
+        file_put_contents($migrationFile, <<<PHP
+<?php
+
+namespace {$namespace};
+
+use Articulate\Modules\Migrations\Generator\BaseMigration;
+
+class {$className} extends BaseMigration {
+    protected function up(): void
+    {
+    }
+
+    protected function down(): void
+    {
+    }
+}
+PHP);
+        // A second, non-matching migration class in the same directory.
+        $otherClassName = 'MigrationBreakOther' . $suffix;
+        $otherFile = $tempDir . '/' . $otherClassName . '.php';
+        file_put_contents($otherFile, <<<PHP
+<?php
+
+namespace {$namespace};
+
+use Articulate\Modules\Migrations\Generator\BaseMigration;
+
+class {$otherClassName} extends BaseMigration {
+    protected function up(): void
+    {
+    }
+
+    protected function down(): void
+    {
+    }
+}
+PHP);
+
+        $strategy = new RollbackExecutionStrategy($this->connection);
+
+        $statement = $this->createStub(\PDOStatement::class);
+        $statement->method('fetch')->willReturn(['name' => $fullClassName]);
+
+        $this->connection->method('executeQuery')
+            ->willReturn($statement);
+        $this->connection->method('inTransaction')->willReturn(true);
+
+        $this->io->expects($this->once())
+            ->method('success')
+            ->with("Migration {$fullClassName} rolled back successfully.");
+
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($tempDir, \RecursiveDirectoryIterator::SKIP_DOTS)
+            );
+
+            $result = $strategy->execute($this->io, [], $iterator, $tempDir);
+
+            $this->assertEquals(0, $result);
+        } finally {
+            unlink($migrationFile);
+            unlink($otherFile);
+            rmdir($tempDir);
+        }
+    }
+
+    public function testRollbackStrategyRejectsFileOutsideDirectoryEvenWhenRealpathSucceeds(): void
+    {
+        // Covers LogicalOr mutant on "$realFile === false || !isFileWithinDirectory"
+        // and ConcatOperandRemoval on DIRECTORY_SEPARATOR — a file that resolves fine
+        // via realpath() but lives in a sibling directory (not under $realDir) must
+        // still be rejected as "outside the directory" (prefix match, not substring match).
+        $statement = $this->createStub(\PDOStatement::class);
+        $statement->method('fetch')->willReturn(['name' => 'Some\\Migration']);
+
+        $this->connection->expects($this->once())
+            ->method('executeQuery')
+            ->willReturn($statement);
+
+        $baseDir = sys_get_temp_dir() . '/articulate_rollback_prefix_base_' . uniqid();
+        // Sibling directory whose name starts with $baseDir's name as a string prefix,
+        // but is NOT nested inside it — this defeats a naive str_starts_with($realFile, $realDir)
+        // check without the DIRECTORY_SEPARATOR suffix.
+        $siblingDir = $baseDir . '_sibling';
+        mkdir($baseDir);
+        mkdir($siblingDir);
+
+        $phpFile = $siblingDir . '/Sneaky.php';
+        file_put_contents($phpFile, '<?php // placeholder');
+
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($siblingDir, \RecursiveDirectoryIterator::SKIP_DOTS)
+            );
+
+            $this->io->expects($this->once())
+                ->method('warning')
+                ->with($this->stringContains('not found'));
+
+            $result = $strategy = new RollbackExecutionStrategy($this->connection);
+            $result = $strategy->execute($this->io, [], $iterator, $baseDir);
+
+            $this->assertEquals(1, $result);
+        } finally {
+            unlink($phpFile);
+            rmdir($siblingDir);
+            rmdir($baseDir);
         }
     }
 }

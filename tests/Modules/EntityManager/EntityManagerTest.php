@@ -229,6 +229,15 @@ class EntityManagerTest extends TestCase {
         $this->assertTrue(true);
     }
 
+    public function testBeginTransactionDelegatesToConnection(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->expects($this->once())->method('beginTransaction');
+
+        $em = new EntityManager($connection);
+        $em->beginTransaction();
+    }
+
     public function testCommit(): void
     {
         $this->entityManager->beginTransaction();
@@ -238,6 +247,15 @@ class EntityManagerTest extends TestCase {
         $this->assertTrue(true);
     }
 
+    public function testCommitDelegatesToConnection(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->expects($this->once())->method('commit');
+
+        $em = new EntityManager($connection);
+        $em->commit();
+    }
+
     public function testRollback(): void
     {
         $this->entityManager->beginTransaction();
@@ -245,6 +263,65 @@ class EntityManagerTest extends TestCase {
         // Should not throw an exception
         $this->entityManager->rollback();
         $this->assertTrue(true);
+    }
+
+    public function testRollbackDelegatesToConnection(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->expects($this->once())->method('rollbackTransaction');
+
+        $em = new EntityManager($connection);
+        $em->rollback();
+    }
+
+    public function testTransactionalCallsBeginCommitInOrder(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $calls = [];
+        $connection->method('beginTransaction')->willReturnCallback(function () use (&$calls) {
+            $calls[] = 'begin';
+        });
+        $connection->method('commit')->willReturnCallback(function () use (&$calls) {
+            $calls[] = 'commit';
+        });
+        $connection->expects($this->never())->method('rollbackTransaction');
+
+        $em = new EntityManager($connection);
+        $em->transactional(fn () => 'ok');
+
+        $this->assertSame(['begin', 'commit'], $calls);
+    }
+
+    public function testTransactionalRollsBackViaConnectionOnException(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->expects($this->once())->method('beginTransaction');
+        $connection->expects($this->never())->method('commit');
+        $connection->expects($this->once())->method('rollbackTransaction');
+
+        $em = new EntityManager($connection);
+
+        try {
+            $em->transactional(function () {
+                throw new \RuntimeException('boom');
+            });
+            $this->fail('Expected exception to propagate');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('boom', $e->getMessage());
+        }
+    }
+
+    public function testSetHydratorPropagatesToReadServiceAndRefreshService(): void
+    {
+        $connection = $this->createStub(Connection::class);
+        $em = new EntityManager($connection);
+
+        $customHydrator = $this->createStub(HydratorInterface::class);
+        $em->setHydrator($customHydrator);
+
+        $qb = $em->createQueryBuilder();
+        $this->assertSame($customHydrator, $qb->getHydrator(), 'EntityReadService must receive the new hydrator');
+        $this->assertSame($customHydrator, $em->getHydrator());
     }
 
     public function testMultipleUnitOfWorks(): void

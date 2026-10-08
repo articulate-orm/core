@@ -190,4 +190,76 @@ class TypeMapperTest extends TestCase {
         $this->assertSame('int', $mapper->getPhpType('SMALLSERIAL'));
         $this->assertSame('int', $mapper->getPhpType('serial'));
     }
+
+    public function testMySqlTypeMapperRegistersNonNullableDateTimeType(): void
+    {
+        // Covers MethodCallRemoval on registerType('DateTime', 'DATETIME') — the
+        // non-nullable 'DateTime' key specifically (distinct from '?DateTime').
+        $mapper = new MySqlTypeMapper();
+
+        $this->assertSame('DATETIME', $mapper->getDatabaseType('DateTime'));
+    }
+
+    public function testMySqlTypeMapperRegistersNullableFloatType(): void
+    {
+        // Covers MethodCallRemoval on registerType('?float', 'DOUBLE').
+        $mapper = new MySqlTypeMapper();
+
+        $this->assertSame('DOUBLE', $mapper->getDatabaseType('?float'));
+    }
+
+    public function testMySqlTypeMapperGetPhpTypePrefersDbToPhpOverInference(): void
+    {
+        // Covers Coalesce operand-swap mutant: dbToPhp[baseType] must win over
+        // inferPhpType(). 'POINT' is registered to Point::class via dbToPhp, but
+        // inferPhpType() has no POINT arm and would fall back to 'mixed' — the
+        // swapped coalesce would therefore return 'mixed' instead of Point::class.
+        $mapper = new MySqlTypeMapper();
+
+        $this->assertSame(Point::class, $mapper->getPhpType('POINT'));
+    }
+
+    public function testPostgresqlTypeMapperRegistersNullableDateTimeImmutableType(): void
+    {
+        // Covers MethodCallRemoval on registerType('?DateTimeImmutable', 'TIMESTAMP').
+        $mapper = new PostgresqlTypeMapper();
+
+        $this->assertSame('TIMESTAMP', $mapper->getDatabaseType('?DateTimeImmutable'));
+    }
+
+    public function testPostgresqlTypeMapperRegistersNullableJsonType(): void
+    {
+        // Covers MethodCallRemoval on registerType('?json', 'JSONB').
+        $mapper = new PostgresqlTypeMapper();
+
+        $this->assertSame('JSONB', $mapper->getDatabaseType('?json'));
+    }
+
+    public function testPostgresqlTypeMapperClassMappingUsesPriorityTen(): void
+    {
+        // Covers IncrementInteger mutant on the DateTimeInterface class-mapping
+        // priority (10 -> 11): read the registered priority directly via
+        // reflection on the private classMappings map, since DateTimeInterface
+        // is the only interface DateTime implements that's registered, so we
+        // can't force a losing competition through getDatabaseType() alone.
+        $mapper = new PostgresqlTypeMapper();
+
+        $reflection = new \ReflectionClass(TypeRegistry::class);
+        $property = $reflection->getProperty('classMappings');
+        $property->setAccessible(true);
+        $classMappings = $property->getValue($mapper);
+
+        $this->assertSame(10, $classMappings[\DateTimeInterface::class]['priority']);
+    }
+
+    public function testPostgresqlTypeMapperGetPhpTypePrefersDbToPhpOverInference(): void
+    {
+        // Covers Coalesce operand-swap mutant: dbToPhp['TIMESTAMP'] is registered
+        // (last writer wins: 'DateTimeImmutable'), while inferPhpType('TIMESTAMP')
+        // would independently return 'string' — the swapped coalesce would
+        // surface 'string' instead.
+        $mapper = new PostgresqlTypeMapper();
+
+        $this->assertSame('DateTimeImmutable', $mapper->getPhpType('TIMESTAMP'));
+    }
 }

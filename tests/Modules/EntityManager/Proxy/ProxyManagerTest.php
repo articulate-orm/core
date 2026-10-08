@@ -182,6 +182,53 @@ class ProxyManagerTest extends AbstractTestCase {
         $this->assertEquals(456, $target->id);
         // Private/protected properties should not be copied
     }
+
+    // ── Mutation killers for 234-236 ─────────────────────────────────────────
+
+    #[AllowMockObjectsWithoutExpectations]
+    public function testCopyEntityDataSkipsPropertiesInSkipList(): void
+    {
+        // The Continue_->Break_ mutant would stop copying ALL subsequent
+        // properties once the first skip-listed one is encountered, instead
+        // of just skipping that one property.
+        $source = new ProxyManagerTestEntity();
+        $source->id = 1;
+        $source->name = 'Should Skip';
+        $source->publicField = 'Should Copy';
+
+        $target = new ProxyManagerTestEntity();
+
+        $reflection = new \ReflectionClass($this->proxyManager);
+        $method = $reflection->getMethod('copyEntityData');
+        $method->setAccessible(true);
+
+        $method->invoke($this->proxyManager, $source, $target, ['name']);
+
+        $this->assertEquals(1, $target->id);
+        $this->assertNull($target->name, "'name' is skip-listed and must not be copied");
+        $this->assertSame('Should Copy', $target->publicField, "'publicField' comes after the skipped property and must still be copied");
+    }
+
+    #[AllowMockObjectsWithoutExpectations]
+    public function testCopyEntityDataActuallySetsAccessibleBeforeReading(): void
+    {
+        // TrueValue mutant flips setAccessible(true) to setAccessible(false) on
+        // the source property before getValue(). Private properties are normally
+        // inaccessible without that call — ProxyManagerPrivatePropertyEntity below
+        // has a private property that reflection must still be able to read/copy.
+        $source = new ProxyManagerPrivatePropertyEntity();
+        $source->setSecret('top-secret');
+
+        $target = new ProxyManagerPrivatePropertyEntity();
+
+        $reflection = new \ReflectionClass($this->proxyManager);
+        $method = $reflection->getMethod('copyEntityData');
+        $method->setAccessible(true);
+
+        $method->invoke($this->proxyManager, $source, $target);
+
+        $this->assertSame('top-secret', $target->getSecret(), 'Private property must be copied via setAccessible(true)');
+    }
 }
 
 /**
@@ -193,6 +240,20 @@ class ProxyManagerTestEntity {
     public ?string $name = null;
 
     public string $publicField = '';
+}
+
+class ProxyManagerPrivatePropertyEntity {
+    private string $secret = '';
+
+    public function setSecret(string $value): void
+    {
+        $this->secret = $value;
+    }
+
+    public function getSecret(): string
+    {
+        return $this->secret;
+    }
 }
 
 /**

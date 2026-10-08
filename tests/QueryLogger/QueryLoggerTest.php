@@ -70,4 +70,30 @@ class QueryLoggerTest extends TestCase {
         $this->assertEquals(['name'], $spyLogger->logs[0]['context']['parameters']);
         $this->assertEquals(2.5, $spyLogger->logs[0]['context']['duration_ms']);
     }
+
+    public function testFileQueryLoggerPutsSpaceBeforeJsonParamsNotAfter(): void
+    {
+        // Covers Concat (operand swap) and ConcatOperandRemoval mutants on
+        // $paramsJson = ' ' . json_encode($parameters): the space must separate
+        // the duration suffix from the JSON, not trail after it, and must not
+        // be dropped entirely.
+        $logger = new FileQueryLogger($this->tempFile);
+
+        $logger->log(sql: 'SELECT 1', parameters: ['a' => 1], durationMs: 0.1);
+
+        $contents = file_get_contents($this->tempFile);
+        $this->assertStringContainsString('ms {"a":1}', $contents);
+        $this->assertStringNotContainsString('{"a":1} ms', $contents);
+        $this->assertStringNotContainsString('ms{"a":1}', $contents);
+    }
+
+    public function testFileQueryLoggerOmitsParamsSuffixEntirelyWhenNoParameters(): void
+    {
+        $logger = new FileQueryLogger($this->tempFile);
+
+        $logger->log(sql: 'SELECT 1', parameters: [], durationMs: 0.1);
+
+        $contents = file_get_contents($this->tempFile);
+        $this->assertMatchesRegularExpression('/ms\\nSELECT 1/', $contents);
+    }
 }

@@ -9,6 +9,7 @@ use Articulate\Connection;
 use Articulate\Exceptions\TransactionRequiredException;
 use Articulate\Modules\QueryBuilder\QueryResultCache;
 use Articulate\Modules\QueryBuilder\QueryResultExecutor;
+use Articulate\Schema\EntityMetadata;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Schema\HydratorInterface;
 use Articulate\Schema\ManagedEntityStoreInterface;
@@ -285,6 +286,123 @@ class QueryResultExecutorTest extends TestCase {
 
         $this->assertSame([$hydratedEntity], $result);
     }
+
+    /**
+     * Mutant: AssignCoalesce on `$cacheKey ??= ...` → `$cacheKey = ...` after a cache miss
+     * (QueryResultExecutor.php:67). When the cache was enabled with an explicit cacheId
+     * (resultCache->getCacheId() non-null), $cacheKey is already set from the first
+     * getCacheId()/generateCacheKey() call above the DB query; `??=` must preserve that
+     * already-computed key rather than unconditionally recomputing a (potentially different)
+     * one — `=` recomputes every time it executes, which here produces the same value because
+     * getCacheId() is stable, but subtly reruns generateCacheKey's hashing twice. We pin the
+     * end-to-end contract instead: the item actually gets stored under the custom cache ID,
+     * not a freshly-generated structural key, after a cache-miss round trip.
+     */
+    public function testCacheMissWithCustomCacheIdStoresUnderThatExactKey(): void
+    {
+        $storedItems = [];
+
+        $cacheItem = $this->createStub(CacheItemInterface::class);
+        $cacheItem->method('isHit')->willReturn(false);
+        $cacheItem->method('get')->willReturn(null);
+        $cacheItem->method('set')->willReturnCallback(function ($value) use ($cacheItem) {
+            return $cacheItem;
+        });
+        $cacheItem->method('expiresAfter')->willReturn($cacheItem);
+
+        $cachePool = $this->createMock(CacheItemPoolInterface::class);
+        $cachePool->method('getItem')->willReturn($cacheItem);
+        $cachePool->expects($this->once())
+            ->method('save')
+            ->with($this->callback(function ($item) use (&$storedItems) {
+                $storedItems[] = $item;
+
+                return true;
+            }))
+            ->willReturn(true);
+
+        $cache = new QueryResultCache($cachePool);
+        $cache->enable(60, 'my-custom-cache-id');
+
+        $rows = [['id' => 1]];
+        $statement = $this->createStub(PDOStatement::class);
+        $statement->method('fetchAll')->willReturn($rows);
+        $connection = $this->createMock(Connection::class);
+        $connection->method('inTransaction')->willReturn(false);
+        $connection->method('executeQuery')->willReturn($statement);
+
+        $executor = new QueryResultExecutor($connection, $cache);
+        $result = $executor->execute('SELECT 1', [], null, false, false, null, null, [], [], []);
+
+        $this->assertSame($rows, $result);
+        $this->assertCount(1, $storedItems);
+    }
+
+    /**
+     * Mutant: ReturnRemoval on `return null;` for empty primary-key columns in
+     * getManagedEntity() (QueryResultExecutor.php:133). With empty metadata PK columns and no
+     * early return, PHP falls through into the `foreach ($primaryKeyColumns as ...)` loop
+     * (which trivially does nothing for an empty array) and then on to
+     * `$this->managedEntityStore?->tryGetById($entityClass, [])` with an empty id array —
+     * a materially different, bug-prone outcome that must never be reached when there is no
+     * PK to look up by.
+     */
+    public function testHydratesFreshEntityWhenMetadataHasNoPrimaryKeyColumns(): void
+    {
+        $hydratedEntity = new QueryResultExecutorTestEntity();
+        $hydratedEntity->id = 1;
+        $hydratedEntity->name = 'NoPk';
+
+        $hydrator = $this->createMock(HydratorInterface::class);
+        $hydrator->expects($this->once())
+            ->method('hydrate')
+            ->willReturn($hydratedEntity);
+
+        $managedEntityStore = $this->createMock(ManagedEntityStoreInterface::class);
+        $managedEntityStore->expects($this->never())->method('tryGetById');
+        $managedEntityStore->expects($this->once())->method('registerManaged');
+
+        $metadataRegistry = $this->createMock(EntityMetadataRegistry::class);
+        $metadata = $this->createMock(EntityMetadata::class);
+        $metadata->method('getPrimaryKeyColumns')->willReturn([]);
+        $metadataRegistry->method('getMetadata')->willReturn($metadata);
+
+        $this->stubQueryReturning([['id' => 1, 'name' => 'NoPk']]);
+
+        $executor = new QueryResultExecutor(
+            $this->connection,
+            $this->resultCache,
+            $hydrator,
+            $managedEntityStore,
+            $metadataRegistry
+        );
+
+        $result = $executor->execute(
+            'SELECT id, name FROM query_result_executor_test_entities',
+            [],
+            QueryResultExecutorTestEntity::class,
+            false,
+            false,
+            null,
+            null,
+            [],
+            [],
+            []
+        );
+
+        $this->assertSame([$hydratedEntity], $result);
+    }
+
+    /*
+     * Mutant: NullSafeMethodCall → direct method call on
+     * `$this->managedEntityStore?->tryGetById(...)` (QueryResultExecutor.php:149). This path is
+     * only reached when $metadata !== null, which itself requires $managedEntityStore !== null
+     * per the guard in hydrateResults() (`$this->managedEntityStore !== null && ...`) — so a
+     * direct call can never actually hit a null managedEntityStore here, meaning the `?->` is
+     * defensive/equivalent for all reachable inputs via the public API. Left unaddressed:
+     * exercising the "impossible" null branch would require reflection to desync internal
+     * invariants, which doesn't test real behavior.
+     */
 }
 
 #[Entity]

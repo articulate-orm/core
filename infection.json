@@ -18,6 +18,7 @@
         "summary": "build/infection/summary.txt"
     },
     "tmpDir": "build/infection",
+    "timeout": 30,
     "minMsi": 88,
     "minCoveredMsi": 88
 }

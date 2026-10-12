@@ -250,6 +250,54 @@ class QueryBuilderCacheableTest extends DatabaseTestCase {
         $this->assertSame(2, $logger->selectCount, 'Aggregate queries must never be served from the collection cache.');
     }
 
+    /**
+     * Resolving a cacheable() cache hit must actually register the entity in
+     * the identity map (not just hydrate it ephemerally) — otherwise a
+     * follow-up find() for the same id would issue a redundant database
+     * read instead of reusing the already-resolved instance.
+     */
+    #[DataProvider('databaseProvider')]
+    public function testCacheResolvedEntityIsRegisteredInIdentityMap(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+        $id = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'qb_cache_products_id_seq' : null);
+
+        $cache = new QbArrayCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        // First call: DB miss, populates both the collection cache and (via
+        // QueryResultExecutor::cacheFreshRow) the per-entity L2 cache.
+        $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+
+        // Clear the identity map only — the collection cache and per-entity
+        // L2 cache survive, so the next getResult() resolves via tryResolve()'s
+        // per-entity-cache branch (not the identity-map branch).
+        $em->clear();
+
+        $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+        $selectCountAfterCacheResolvedCall = $logger->selectCount;
+
+        // find() for the same id must now return the exact instance
+        // registerManaged() put in the identity map above, with zero
+        // additional database reads.
+        $entity = $em->find(QbCacheProduct::class, $id);
+
+        $this->assertNotNull($entity);
+        $this->assertSame('Widget', $entity->name);
+        $this->assertSame(
+            $selectCountAfterCacheResolvedCall,
+            $logger->selectCount,
+            'find() for an id already resolved via the cache must hit the identity map, not the database.'
+        );
+    }
+
     private function createProductTable(Connection $connection, string $databaseName): void
     {
         if ($databaseName === 'pgsql') {

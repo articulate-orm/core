@@ -115,6 +115,8 @@ class EntityManager {
             $resultCache,
             $statementCache,
             $this->proxyManager,
+            $secondLevelCache,
+            $secondLevelCacheTtl,
         );
         $this->refreshService = new EntityRefreshService(
             $this->connection,

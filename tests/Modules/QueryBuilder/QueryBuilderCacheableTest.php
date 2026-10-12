@@ -1,0 +1,282 @@
+<?php
+
+namespace Articulate\Tests\Modules\QueryBuilder;
+
+use Articulate\Attributes\Entity;
+use Articulate\Attributes\Indexes\PrimaryKey;
+use Articulate\Attributes\Property;
+use Articulate\Connection;
+use Articulate\Modules\EntityManager\EntityManager;
+use Articulate\QueryLogger\QueryLoggerInterface;
+use Articulate\Tests\DatabaseTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Psr\Cache\CacheItemInterface;
+use Psr\Cache\CacheItemPoolInterface;
+
+class QbCacheItem implements CacheItemInterface {
+    private mixed $value = null;
+
+    private bool $isHit = false;
+
+    public function __construct(private readonly string $key)
+    {
+    }
+
+    public function getKey(): string
+    {
+        return $this->key;
+    }
+
+    public function get(): mixed
+    {
+        return $this->isHit ? $this->value : null;
+    }
+
+    public function isHit(): bool
+    {
+        return $this->isHit;
+    }
+
+    public function set(mixed $value): static
+    {
+        $this->value = $value;
+        $this->isHit = true;
+
+        return $this;
+    }
+
+    public function expiresAt(?\DateTimeInterface $expiration): static
+    {
+        return $this;
+    }
+
+    public function expiresAfter(int|\DateInterval|null $time): static
+    {
+        return $this;
+    }
+}
+
+class QbArrayCachePool implements CacheItemPoolInterface {
+    /** @var array<string, CacheItemInterface> */
+    public array $items = [];
+
+    public function getItem(string $key): CacheItemInterface
+    {
+        return $this->items[$key] ??= new QbCacheItem($key);
+    }
+
+    /**
+     * @param string[] $keys
+     * @return iterable<string, CacheItemInterface>
+     */
+    public function getItems(array $keys = []): iterable
+    {
+        return array_combine($keys, array_map($this->getItem(...), $keys));
+    }
+
+    public function hasItem(string $key): bool
+    {
+        return isset($this->items[$key]) && $this->items[$key]->isHit();
+    }
+
+    public function clear(): bool
+    {
+        $this->items = [];
+
+        return true;
+    }
+
+    public function deleteItem(string $key): bool
+    {
+        unset($this->items[$key]);
+
+        return true;
+    }
+
+    public function deleteItems(array $keys): bool
+    {
+        foreach ($keys as $key) {
+            unset($this->items[$key]);
+        }
+
+        return true;
+    }
+
+    public function save(CacheItemInterface $item): bool
+    {
+        $this->items[$item->getKey()] = $item;
+
+        return true;
+    }
+
+    public function saveDeferred(CacheItemInterface $item): bool
+    {
+        return $this->save($item);
+    }
+
+    public function commit(): bool
+    {
+        return true;
+    }
+}
+
+/**
+ * Counts how many SELECT statements actually reached the database, used as
+ * the "did this hit the DB" signal for cache-hit assertions.
+ */
+class SelectCountingLogger implements QueryLoggerInterface {
+    public int $selectCount = 0;
+
+    /**
+     * @param mixed[] $parameters
+     */
+    public function log(string $sql, array $parameters, float $durationMs): void
+    {
+        if (str_starts_with(ltrim($sql), 'SELECT')) {
+            $this->selectCount++;
+        }
+    }
+}
+
+#[Entity(tableName: 'qb_cache_products')]
+class QbCacheProduct {
+    #[PrimaryKey]
+    public ?int $id = null;
+
+    #[Property]
+    public string $name;
+
+    #[Property]
+    public int $price;
+}
+
+class QueryBuilderCacheableTest extends DatabaseTestCase {
+    #[DataProvider('databaseProvider')]
+    public function testCacheableQueryIsServedFromCacheOnSecondCall(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+        $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Gadget', 20]);
+
+        $cache = new QbArrayCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        $qb = $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable();
+        $firstResult = $qb->getResult();
+
+        $this->assertCount(2, $firstResult);
+        $this->assertSame(1, $logger->selectCount, 'First call must hit the database exactly once.');
+
+        $em->clear();
+
+        $qb2 = $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable();
+        $secondResult = $qb2->getResult();
+
+        $this->assertCount(2, $secondResult);
+        $this->assertSame('Widget', $secondResult[0]->name);
+        $this->assertSame('Gadget', $secondResult[1]->name);
+        $this->assertSame(1, $logger->selectCount, 'Second identical call must be served from cache, not the database.');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testNonCacheableQueryAlwaysHitsDatabase(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+
+        $cache = new QbArrayCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->getResult();
+        $em->clear();
+        $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->getResult();
+
+        $this->assertSame(2, $logger->selectCount, 'Queries without cacheable() must always hit the database.');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testCacheableIsNoOpWhenNoSecondLevelCachePoolConfigured(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+
+        // No secondLevelCache pool configured on the EntityManager.
+        $em = new EntityManager($loggedConnection);
+
+        $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+        $em->clear();
+        $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+
+        $this->assertSame(2, $logger->selectCount, 'cacheable() must be a silent no-op without a configured L2 pool.');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testCacheableIsNoOpForAggregateQueries(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+
+        $cache = new QbArrayCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        // count() bypasses ObjectHydrator — cacheable() must be a silent no-op here.
+        $em->createQueryBuilder(QbCacheProduct::class)->count()->cacheable()->getResult();
+        $em->createQueryBuilder(QbCacheProduct::class)->count()->cacheable()->getResult();
+
+        $this->assertSame(2, $logger->selectCount, 'Aggregate queries must never be served from the collection cache.');
+    }
+
+    private function createProductTable(Connection $connection, string $databaseName): void
+    {
+        if ($databaseName === 'pgsql') {
+            $connection->executeQuery('DROP TABLE IF EXISTS qb_cache_products CASCADE');
+            $connection->executeQuery(
+                'CREATE TABLE qb_cache_products (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, price INT NOT NULL)'
+            );
+        } else {
+            $connection->executeQuery('DROP TABLE IF EXISTS qb_cache_products');
+            $connection->executeQuery(
+                'CREATE TABLE qb_cache_products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255) NOT NULL, price INT NOT NULL)'
+            );
+        }
+    }
+
+    /**
+     * The shared Connection from ConnectionPool has no logger wired in and is
+     * already mid-transaction with our fixture rows. Inject the spy logger
+     * into the existing instance via reflection rather than opening a second
+     * PDO connection, which would not see this test's uncommitted inserts.
+     */
+    private function withLogger(Connection $connection, string $databaseName, QueryLoggerInterface $logger): Connection
+    {
+        $property = new \ReflectionProperty(Connection::class, 'queryLogger');
+        $property->setAccessible(true);
+        $property->setValue($connection, $logger);
+
+        return $connection;
+    }
+}

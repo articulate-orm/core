@@ -4,6 +4,7 @@ namespace Articulate\Modules\QueryBuilder;
 
 use Articulate\Connection;
 use Articulate\Exceptions\TransactionRequiredException;
+use Articulate\Schema\CachedEntityResolverInterface;
 use Articulate\Schema\EntityMetadata;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Schema\HydratorInterface;
@@ -29,7 +30,8 @@ class QueryResultExecutor {
         ?int $offset,
         array $orderBy,
         array $groupBy,
-        array $having
+        array $having,
+        ?CachedEntityResolverInterface $rowCacheResolver = null,
     ): mixed {
         if ($lockForUpdate && !$this->connection->inTransaction()) {
             throw new TransactionRequiredException('lock() requires an active transaction');
@@ -83,14 +85,14 @@ class QueryResultExecutor {
             return [];
         }
 
-        return $this->hydrateResults($rawResults, $entityClass);
+        return $this->hydrateResults($rawResults, $entityClass, $rowCacheResolver);
     }
 
-    private function hydrateResults(array $rawResults, ?string $entityClass): mixed
+    private function hydrateResults(array $rawResults, ?string $entityClass, ?CachedEntityResolverInterface $rowCacheResolver = null): mixed
     {
         if ($entityClass && $this->hydrator) {
             $metadata = null;
-            if ($this->managedEntityStore !== null && $this->metadataRegistry !== null) {
+            if ($this->metadataRegistry !== null) {
                 try {
                     $metadata = $this->metadataRegistry->getMetadata($entityClass);
                 } catch (\InvalidArgumentException) {
@@ -101,7 +103,7 @@ class QueryResultExecutor {
             $entities = [];
 
             foreach ($rawResults as $row) {
-                if ($metadata !== null) {
+                if ($metadata !== null && $this->managedEntityStore !== null) {
                     $managedEntity = $this->getManagedEntity($entityClass, $metadata, $row);
                     if ($managedEntity !== null) {
                         $entities[] = $managedEntity;
@@ -116,6 +118,10 @@ class QueryResultExecutor {
                     $this->managedEntityStore->registerManaged($entity, $row);
                 }
 
+                if (is_object($entity) && $rowCacheResolver !== null && $metadata !== null) {
+                    $this->cacheFreshRow($rowCacheResolver, $entityClass, $metadata, $row);
+                }
+
                 $entities[] = $entity;
             }
 
@@ -123,6 +129,27 @@ class QueryResultExecutor {
         }
 
         return $rawResults;
+    }
+
+    /**
+     * A fresh (non-cache, non-identity-map) row just loaded for a cacheable()
+     * collection query is also written to the per-entity second-level cache,
+     * so a later cache hit's id-list can resolve this id via
+     * CachedEntityResolverInterface::tryResolve() without a database read.
+     * Single-column primary keys only — composite keys are skipped, same
+     * limitation as getManagedEntity() reuses for its own id lookup.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function cacheFreshRow(CachedEntityResolverInterface $rowCacheResolver, string $entityClass, EntityMetadata $metadata, array $row): void
+    {
+        $primaryKeyColumns = $metadata->getPrimaryKeyColumns();
+
+        if (count($primaryKeyColumns) !== 1 || !array_key_exists($primaryKeyColumns[0], $row)) {
+            return;
+        }
+
+        $rowCacheResolver->cacheResolvedRow($entityClass, $row[$primaryKeyColumns[0]], $row);
     }
 
     private function getManagedEntity(string $entityClass, EntityMetadata $metadata, array $row): ?object

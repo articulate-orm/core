@@ -26,7 +26,7 @@ class WhereClauseBuilderTest extends DatabaseTestCase {
         $sqlCompiler = new SqlCompiler();
 
         return new WhereClauseBuilder(
-            fn () => new QueryBuilder($this->connection, null, null, null, null, null, null),
+            fn () => new QueryBuilder($this->connection, null, null, null, null),
             $sqlCompiler
         );
     }

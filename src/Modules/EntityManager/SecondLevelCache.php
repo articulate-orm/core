@@ -2,7 +2,7 @@
 
 namespace Articulate\Modules\EntityManager;
 
-use InvalidArgumentException;
+use Articulate\Modules\Cache\IdNormalizer;
 use Psr\Cache\CacheItemPoolInterface;
 
 class SecondLevelCache {
@@ -49,41 +49,11 @@ class SecondLevelCache {
     }
 
     /**
-     * Produce a deterministic, type-tagged string for an identifier so distinct
-     * IDs never collide on the same key (e.g. int 1 vs string "1", or two value
-     * objects that JSON-encode to the same shape). Composite keys (arrays) are
-     * normalized recursively in a stable order.
+     * Delegates to the shared IdNormalizer so reverse-index keys built in the
+     * Cache module normalize identifiers identically to this per-entity region.
      */
     private function normalizeId(mixed $id): string
     {
-        if (is_int($id) || is_string($id)) {
-            return (is_int($id) ? 'i:' : 's:') . $id;
-        }
-
-        if (is_bool($id)) {
-            return 'b:' . ($id ? '1' : '0');
-        }
-
-        if (is_float($id)) {
-            return 'd:' . $id;
-        }
-
-        if ($id instanceof \Stringable) {
-            return 'o:' . $id::class . ':' . $id;
-        }
-
-        if (is_array($id)) {
-            ksort($id);
-            $parts = [];
-            foreach ($id as $key => $value) {
-                $parts[] = $key . '=' . $this->normalizeId($value);
-            }
-
-            return 'a:[' . implode(',', $parts) . ']';
-        }
-
-        throw new InvalidArgumentException(
-            'Second-level cache identifier must be scalar, Stringable, or array; got ' . get_debug_type($id)
-        );
+        return IdNormalizer::normalize($id);
     }
 }

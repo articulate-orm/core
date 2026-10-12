@@ -19,8 +19,29 @@ class SpyCollectionCache implements CollectionCacheInterface {
     /** @var list<array{key: string, ids: list<mixed>, ttl: int}> */
     public array $setCalls = [];
 
+    /** @var list<string> */
+    public array $evictIdListCalls = [];
+
+    /** @var list<array{table: string, id: mixed, cacheKey: string, ttl: int}> */
+    public array $addToReverseIndexCalls = [];
+
+    /** @var list<array{table: string, id: mixed}> */
+    public array $getReverseIndexCacheKeysCalls = [];
+
+    /** @var list<array{table: string, id: mixed}> */
+    public array $evictReverseIndexCalls = [];
+
+    /** @var list<array{table: string, ids: list<mixed>}> */
+    public array $findMissingReverseIndexIdsCalls = [];
+
     /** @var list<mixed>|null */
     private ?array $nextGetResult = null;
+
+    /** @var array<string, list<string>> keyed by "$table:$id" */
+    private array $reverseIndexCacheKeysToReturn = [];
+
+    /** @var list<mixed> */
+    private array $missingReverseIndexIdsToReturn = [];
 
     /**
      * @param list<mixed>|null $ids
@@ -28,6 +49,22 @@ class SpyCollectionCache implements CollectionCacheInterface {
     public function willReturnOnNextGet(?array $ids): void
     {
         $this->nextGetResult = $ids;
+    }
+
+    /**
+     * @param list<string>|null $cacheKeys
+     */
+    public function willReturnReverseIndexCacheKeysFor(string $tableName, mixed $id, ?array $cacheKeys): void
+    {
+        $this->reverseIndexCacheKeysToReturn[$tableName . ':' . $id] = $cacheKeys;
+    }
+
+    /**
+     * @param list<mixed> $ids
+     */
+    public function willReturnMissingReverseIndexIds(array $ids): void
+    {
+        $this->missingReverseIndexIdsToReturn = $ids;
     }
 
     public function getIdList(string $key): ?array
@@ -40,6 +77,35 @@ class SpyCollectionCache implements CollectionCacheInterface {
     public function setIdList(string $key, array $ids, int $ttl): void
     {
         $this->setCalls[] = ['key' => $key, 'ids' => $ids, 'ttl' => $ttl];
+    }
+
+    public function evictIdList(string $key): void
+    {
+        $this->evictIdListCalls[] = $key;
+    }
+
+    public function addToReverseIndex(string $tableName, mixed $id, string $cacheKey, int $ttl): void
+    {
+        $this->addToReverseIndexCalls[] = ['table' => $tableName, 'id' => $id, 'cacheKey' => $cacheKey, 'ttl' => $ttl];
+    }
+
+    public function getReverseIndexCacheKeys(string $tableName, mixed $id): ?array
+    {
+        $this->getReverseIndexCacheKeysCalls[] = ['table' => $tableName, 'id' => $id];
+
+        return $this->reverseIndexCacheKeysToReturn[$tableName . ':' . $id] ?? null;
+    }
+
+    public function evictReverseIndex(string $tableName, mixed $id): void
+    {
+        $this->evictReverseIndexCalls[] = ['table' => $tableName, 'id' => $id];
+    }
+
+    public function findMissingReverseIndexIds(string $tableName, array $ids): array
+    {
+        $this->findMissingReverseIndexIdsCalls[] = ['table' => $tableName, 'ids' => $ids];
+
+        return $this->missingReverseIndexIdsToReturn;
     }
 }
 
@@ -237,5 +303,118 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $key = $cache->buildCacheKey('App\\User', 'SELECT 1', []);
 
         $this->assertStringStartsWith('cq_', $key);
+    }
+
+    public function testStoreIdsWithReverseIndexWritesTheIdListWhenEnabled(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+        $cache->enable(null);
+
+        $cache->storeIdsWithReverseIndex('some-key', [1, 2], 3600, 'products');
+
+        $this->assertCount(1, $collectionCache->setCalls);
+        $this->assertSame([1, 2], $collectionCache->setCalls[0]['ids']);
+    }
+
+    public function testStoreIdsWithReverseIndexWritesAReverseIndexEntryPerId(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+        $cache->enable(null);
+
+        $cache->storeIdsWithReverseIndex('some-key', [1, 2], 3600, 'products');
+
+        $this->assertCount(2, $collectionCache->addToReverseIndexCalls);
+        $this->assertSame(['table' => 'products', 'id' => 1, 'cacheKey' => 'some-key', 'ttl' => 3600], $collectionCache->addToReverseIndexCalls[0]);
+        $this->assertSame(['table' => 'products', 'id' => 2, 'cacheKey' => 'some-key', 'ttl' => 3600], $collectionCache->addToReverseIndexCalls[1]);
+    }
+
+    public function testStoreIdsWithReverseIndexDoesNothingWhenDisabled(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+
+        $cache->storeIdsWithReverseIndex('some-key', [1, 2], 3600, 'products');
+
+        $this->assertSame([], $collectionCache->setCalls);
+        $this->assertSame([], $collectionCache->addToReverseIndexCalls);
+    }
+
+    public function testStoreIdsWithReverseIndexUsesExplicitTtlOverTheDefaultForBoth(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+        $cache->enable(120);
+
+        $cache->storeIdsWithReverseIndex('some-key', [1], 3600, 'products');
+
+        $this->assertSame(120, $collectionCache->setCalls[0]['ttl']);
+        $this->assertSame(120, $collectionCache->addToReverseIndexCalls[0]['ttl']);
+    }
+
+    public function testGetCachedIdsWithCrossValidationReturnsNullWhenDisabled(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $collectionCache->willReturnOnNextGet([1, 2]);
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+
+        $result = $cache->getCachedIdsWithCrossValidation('some-key', 'products');
+
+        $this->assertNull($result);
+        $this->assertSame([], $collectionCache->getCalls);
+    }
+
+    public function testGetCachedIdsWithCrossValidationReturnsNullOnPlainMiss(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $collectionCache->willReturnOnNextGet(null);
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+        $cache->enable(null);
+
+        $result = $cache->getCachedIdsWithCrossValidation('some-key', 'products');
+
+        $this->assertNull($result);
+    }
+
+    public function testGetCachedIdsWithCrossValidationReturnsTheListWhenReverseIndexIsIntact(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $collectionCache->willReturnOnNextGet([1, 2]);
+        $collectionCache->willReturnMissingReverseIndexIds([]);
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+        $cache->enable(null);
+
+        $result = $cache->getCachedIdsWithCrossValidation('some-key', 'products');
+
+        $this->assertSame([1, 2], $result);
+    }
+
+    public function testGetCachedIdsWithCrossValidationDiscardsTheWholeListWhenAnyReverseIndexEntryIsMissing(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $collectionCache->willReturnOnNextGet([1, 2]);
+        $collectionCache->willReturnMissingReverseIndexIds([2]);
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+        $cache->enable(null);
+
+        $result = $cache->getCachedIdsWithCrossValidation('some-key', 'products');
+
+        $this->assertNull($result, 'A missing reverse-index entry for any id must discard the ENTIRE cached list, not partially repair it.');
+    }
+
+    public function testGetCachedIdsWithCrossValidationChecksEveryIdInTheHitListInOneBatchedCall(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $collectionCache->willReturnOnNextGet([1, 2, 3]);
+        $collectionCache->willReturnMissingReverseIndexIds([]);
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+        $cache->enable(null);
+
+        $cache->getCachedIdsWithCrossValidation('some-key', 'products');
+
+        $this->assertCount(1, $collectionCache->findMissingReverseIndexIdsCalls, 'Must be a single batched existence check, not N round-trips.');
+        $this->assertSame('products', $collectionCache->findMissingReverseIndexIdsCalls[0]['table']);
+        $this->assertSame([1, 2, 3], $collectionCache->findMissingReverseIndexIdsCalls[0]['ids']);
     }
 }

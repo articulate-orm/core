@@ -12,6 +12,8 @@ class CacheItem implements CacheItemInterface {
 
     private bool $isHit = false;
 
+    public ?int $expiresAfterSeconds = null;
+
     public function __construct(private readonly string $key)
     {
     }
@@ -46,6 +48,8 @@ class CacheItem implements CacheItemInterface {
 
     public function expiresAfter(int|\DateInterval|null $time): static
     {
+        $this->expiresAfterSeconds = is_int($time) ? $time : null;
+
         return $this;
     }
 }
@@ -116,6 +120,11 @@ class ArrayCachePool implements CacheItemPoolInterface {
 
 class FailingCachePool extends ArrayCachePool {
     public function getItem(string $key): never
+    {
+        throw new \RuntimeException('Cache backend failure');
+    }
+
+    public function getItems(array $keys = []): iterable
     {
         throw new \RuntimeException('Cache backend failure');
     }
@@ -196,6 +205,31 @@ class SaveOnlyCachePool implements CacheItemPoolInterface {
     }
 }
 
+/**
+ * Counts how many getItem()/getItems() calls reach the pool, used to prove
+ * the batch existence check does a single getItems() round trip rather than
+ * N individual getItem() calls.
+ */
+class BatchCountingCachePool extends ArrayCachePool {
+    public int $getItemCallCount = 0;
+
+    public int $getItemsCallCount = 0;
+
+    public function getItem(string $key): CacheItemInterface
+    {
+        $this->getItemCallCount++;
+
+        return parent::getItem($key);
+    }
+
+    public function getItems(array $keys = []): iterable
+    {
+        $this->getItemsCallCount++;
+
+        return array_combine($keys, array_map(fn (string $key) => $this->items[$key] ??= new CacheItem($key), $keys));
+    }
+}
+
 class CollectionCacheTest extends TestCase {
     public function testGetIdListMissesOnEmptyCache(): void
     {
@@ -222,6 +256,27 @@ class CollectionCacheTest extends TestCase {
 
         $this->assertSame([1], $cache->getIdList('key-a'));
         $this->assertSame([2], $cache->getIdList('key-b'));
+    }
+
+    public function testEvictIdListRemovesOnlyTheTargetedEntry(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->setIdList('key-a', [1], 60);
+        $cache->setIdList('key-b', [2], 60);
+
+        $cache->evictIdList('key-a');
+
+        $this->assertNull($cache->getIdList('key-a'));
+        $this->assertSame([2], $cache->getIdList('key-b'));
+    }
+
+    public function testEvictIdListIsGracefulOnBackendFailure(): void
+    {
+        $cache = new CollectionCache(new FailingCachePool());
+
+        $cache->evictIdList('key-a');
+        $this->addToAssertionCount(1);
     }
 
     public function testGetIdListIsGracefulOnBackendFailure(): void
@@ -268,5 +323,180 @@ class CollectionCacheTest extends TestCase {
         $cache->setIdList('some-key', [1], 60);
 
         $this->assertArrayHasKey('l2q:some-key', $pool->items, 'CollectionCache must namespace id-list keys under the l2q: prefix.');
+    }
+
+    public function testAddToReverseIndexThenGetReturnsTheCacheKey(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+
+        $this->assertSame(['cache-key-a'], $cache->getReverseIndexCacheKeys('products', 1));
+    }
+
+    public function testReverseIndexAccumulatesMultipleCacheKeysForSameRow(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+        $cache->addToReverseIndex('products', 1, 'cache-key-b', 60);
+
+        $this->assertSame(['cache-key-a', 'cache-key-b'], $cache->getReverseIndexCacheKeys('products', 1));
+    }
+
+    public function testAddToReverseIndexDoesNotDuplicateTheSameCacheKey(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+
+        $this->assertSame(['cache-key-a'], $cache->getReverseIndexCacheKeys('products', 1));
+    }
+
+    public function testReverseIndexIsScopedByTableNotJustRawId(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+        $cache->addToReverseIndex('orders', 1, 'cache-key-b', 60);
+
+        $this->assertSame(['cache-key-a'], $cache->getReverseIndexCacheKeys('products', 1));
+        $this->assertSame(['cache-key-b'], $cache->getReverseIndexCacheKeys('orders', 1));
+    }
+
+    public function testReverseIndexIsScopedByNormalizedIdTypeTag(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-int', 60);
+        $cache->addToReverseIndex('products', '1', 'cache-key-string', 60);
+
+        $this->assertSame(['cache-key-int'], $cache->getReverseIndexCacheKeys('products', 1));
+        $this->assertSame(['cache-key-string'], $cache->getReverseIndexCacheKeys('products', '1'));
+    }
+
+    public function testGetReverseIndexCacheKeysMissesWhenNeverWritten(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $this->assertNull($cache->getReverseIndexCacheKeys('products', 999));
+    }
+
+    public function testEvictReverseIndexRemovesTheEntry(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+        $cache->evictReverseIndex('products', 1);
+
+        $this->assertNull($cache->getReverseIndexCacheKeys('products', 1));
+    }
+
+    public function testReverseIndexEntryTtlIsQueryEntryTtlPlusGraceBuffer(): void
+    {
+        $pool = new ArrayCachePool();
+        $cache = new CollectionCache($pool);
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+
+        $item = $pool->items['l2qidx:products:i:1'];
+        $this->assertInstanceOf(CacheItem::class, $item);
+        $this->assertSame(60 + CollectionCache::REVERSE_INDEX_GRACE_SECONDS, $item->expiresAfterSeconds);
+    }
+
+    public function testReverseIndexKeysAreStoredUnderTheReverseIndexPrefix(): void
+    {
+        $pool = new ArrayCachePool();
+        $cache = new CollectionCache($pool);
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+
+        $this->assertArrayHasKey('l2qidx:products:i:1', $pool->items, 'Reverse-index entries must be namespaced under the l2qidx: prefix.');
+    }
+
+    public function testAddToReverseIndexIsGracefulOnBackendFailure(): void
+    {
+        $cache = new CollectionCache(new FailingCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+        $this->addToAssertionCount(1);
+    }
+
+    public function testGetReverseIndexCacheKeysIsGracefulOnBackendFailure(): void
+    {
+        $cache = new CollectionCache(new FailingCachePool());
+
+        $this->assertNull($cache->getReverseIndexCacheKeys('products', 1));
+    }
+
+    public function testEvictReverseIndexIsGracefulOnBackendFailure(): void
+    {
+        $cache = new CollectionCache(new FailingCachePool());
+
+        $cache->evictReverseIndex('products', 1);
+        $this->addToAssertionCount(1);
+    }
+
+    public function testAddToReverseIndexActuallyPersistsViaPoolSave(): void
+    {
+        $pool = new SaveOnlyCachePool();
+        $cache = new CollectionCache($pool);
+
+        $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
+
+        $this->assertSame(1, $pool->saveCallCount, 'addToReverseIndex() must call the pool\'s save() to actually persist — a local mutation alone is not a write.');
+    }
+
+    public function testCheckReverseIndexExistenceReturnsEveryMissingIdNotJustOne(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $missing = $cache->findMissingReverseIndexIds('products', [1, 2, 3]);
+
+        $this->assertSame([1, 2, 3], $missing, 'All three ids lack a reverse-index entry — every one of them must be reported missing, not just the first.');
+    }
+
+    public function testCheckReverseIndexExistenceReturnsWhichIdsAreMissing(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'some-key', 60);
+        $cache->addToReverseIndex('products', 2, 'some-key', 60);
+
+        $missing = $cache->findMissingReverseIndexIds('products', [1, 2, 3]);
+
+        $this->assertSame([3], $missing);
+    }
+
+    public function testCheckReverseIndexExistenceUsesBatchedGetItemsNotPerIdRoundTrips(): void
+    {
+        $pool = new BatchCountingCachePool();
+        $cache = new CollectionCache($pool);
+
+        $cache->addToReverseIndex('products', 1, 'some-key', 60);
+        $pool->getItemCallCount = 0;
+        $pool->getItemsCallCount = 0;
+        $cache->findMissingReverseIndexIds('products', [1, 2, 3]);
+
+        $this->assertSame(1, $pool->getItemsCallCount, 'Existence check must use a single batched getItems() call, not N round-trips.');
+        $this->assertSame(0, $pool->getItemCallCount, 'Existence check must not call getItem() per id.');
+    }
+
+    public function testCheckReverseIndexExistenceReturnsEmptyWhenAllPresent(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'some-key', 60);
+        $cache->addToReverseIndex('products', 2, 'some-key', 60);
+
+        $this->assertSame([], $cache->findMissingReverseIndexIds('products', [1, 2]));
+    }
+
+    public function testCheckReverseIndexExistenceIsGracefulOnBackendFailure(): void
+    {
+        $cache = new CollectionCache(new FailingCachePool());
+
+        $this->assertSame([1, 2], $cache->findMissingReverseIndexIds('products', [1, 2]));
     }
 }

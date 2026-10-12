@@ -62,6 +62,57 @@ class QueryResultSecondLevelCache {
     }
 
     /**
+     * Same as storeIds(), plus a reverse-index entry per id so a later
+     * write to any of those rows can evict exactly this cache entry. See
+     * ADR-0002. No-op when not enabled, matching storeIds().
+     *
+     * @param list<mixed> $ids
+     */
+    public function storeIdsWithReverseIndex(string $key, array $ids, int $defaultTtl, string $tableName): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+
+        $ttl = $this->ttl ?? $defaultTtl;
+        $this->collectionCache->setIdList($key, $ids, $ttl);
+
+        foreach ($ids as $id) {
+            $this->collectionCache->addToReverseIndex($tableName, $id, $key, $ttl);
+        }
+    }
+
+    /**
+     * Read-time cross-validation (ADR-0002, "PSR-6 eviction opacity"
+     * protocol): on a list-cache hit, batch-check that the reverse-index
+     * entry still exists for every id in the hit list. If any is missing
+     * (the backend evicted it early, independent of TTL), the ENTIRE cached
+     * list is discarded — not partially repaired — so the caller requeries,
+     * which naturally rewrites the list + reverse index.
+     *
+     * @return list<mixed>|null null on cache miss, not enabled, or a
+     *                           detected reverse-index inconsistency
+     */
+    public function getCachedIdsWithCrossValidation(string $key, string $tableName): ?array
+    {
+        if (!$this->enabled) {
+            return null;
+        }
+
+        $ids = $this->collectionCache->getIdList($key);
+        if ($ids === null) {
+            return null;
+        }
+
+        $missing = $this->collectionCache->findMissingReverseIndexIds($tableName, $ids);
+        if (!empty($missing)) {
+            return null;
+        }
+
+        return $ids;
+    }
+
+    /**
      * @param list<mixed> $params
      */
     public function buildCacheKey(?string $entityClass, string $sql, array $params): string

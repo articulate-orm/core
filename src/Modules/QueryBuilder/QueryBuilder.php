@@ -986,7 +986,8 @@ class QueryBuilder {
      */
     private function tryServeFromCache(string $targetClass, string $cacheKey): ?array
     {
-        $cachedIds = $this->secondLevelCache->getCachedIds($cacheKey);
+        $tableName = $this->resolveTableName($targetClass);
+        $cachedIds = $this->secondLevelCache->getCachedIdsWithCrossValidation($cacheKey, $tableName);
         if ($cachedIds === null) {
             return null;
         }
@@ -1002,7 +1003,8 @@ class QueryBuilder {
 
         $ids = $this->extractIds($results, $targetClass);
         if ($ids !== null) {
-            $this->secondLevelCache->storeIds($cacheKey, $ids, $this->secondLevelCacheDefaultTtl);
+            $tableName = $this->resolveTableName($targetClass);
+            $this->secondLevelCache->storeIdsWithReverseIndex($cacheKey, $ids, $this->secondLevelCacheDefaultTtl, $tableName);
         }
     }
 

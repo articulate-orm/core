@@ -151,6 +151,26 @@ class ValidateCommand extends Command {
                 $ownVersionColumns = $metadata->getVersionColumns();
                 $acknowledged = $metadata->getAcknowledgedVersionColumns();
 
+                // A version column is ORM-managed. Only the slice declaring it via #[Version]
+                // gets the bump/check and the ManagedVersionColumnException guard; a sibling
+                // mapping the same column as a plain #[Property] could overwrite the counter
+                // with an arbitrary value, bypassing both. Never downgraded, #[VersionAware]
+                // does not clear it.
+                foreach (array_intersect($metadata->getColumnNames(), array_keys($guardSets)) as $versionColumn) {
+                    if (in_array($versionColumn, $ownVersionColumns, true)) {
+                        continue;
+                    }
+
+                    $errors++;
+                    $io->error(sprintf(
+                        'Class "%s" maps #[Version] column "%s" of table "%s" as a plain property; '
+                        . 'only a #[Version] property may map a version column.',
+                        $metadata->getClassName(),
+                        $versionColumn,
+                        $tableName,
+                    ));
+                }
+
                 foreach ($guardSets as $versionColumn => $guardedColumns) {
                     if (in_array($versionColumn, $ownVersionColumns, true)) {
                         continue;

@@ -49,12 +49,12 @@ class ValidateCommandVersionTest extends TestCase {
     /**
      * @param array<string, mixed> $input
      */
-    private function runValidate(bool $lenientByDefault = false, array $input = []): CommandTester
+    private function runValidate(bool $lenientByDefault = false, array $input = [], ?string $entitiesPath = null): CommandTester
     {
         $schemaComparator = $this->createStub(DatabaseSchemaComparator::class);
         $schemaComparator->method('compareAll')->willReturn([]);
 
-        $command = new ValidateCommand($schemaComparator, [$this->tempDir], lenientVersionChecks: $lenientByDefault);
+        $command = new ValidateCommand($schemaComparator, [$entitiesPath ?? $this->tempDir], lenientVersionChecks: $lenientByDefault);
         $tester = new CommandTester($command);
         $tester->execute($input);
 
@@ -165,39 +165,13 @@ PHP);
 
     public function testSiblingMappingVersionColumnAsPlainPropertyErrors(): void
     {
-        $ns = $this->uniqueNamespace();
-
-        $this->writeFixture('Owner.php', $ns, <<<'PHP'
-#[\Articulate\Attributes\Entity(tableName: 'vg_plain')]
-class Owner {
-    #[\Articulate\Attributes\Indexes\PrimaryKey]
-    public ?int $id = null;
-
-    #[\Articulate\Attributes\Version]
-    public int $version = 0;
-
-    #[\Articulate\Attributes\Property]
-    public string $status = '';
-}
-PHP);
-
-        $this->writeFixture('Sneaky.php', $ns, <<<'PHP'
-#[\Articulate\Attributes\Entity(tableName: 'vg_plain')]
-#[\Articulate\Attributes\VersionAware(['version'])]
-class Sneaky {
-    #[\Articulate\Attributes\Indexes\PrimaryKey]
-    public ?int $id = null;
-
-    #[\Articulate\Attributes\Property]
-    public int $version = 0;
-}
-PHP);
-
-        $tester = $this->runValidate(input: ['--lenient' => true]);
+        $tester = $this->runValidate(
+            input: ['--lenient' => true],
+            entitiesPath: __DIR__ . '/Fixtures/PlainVersionColumn',
+        );
 
         $this->assertSame(1, $tester->getStatusCode());
-        $display = $tester->getDisplay();
-        $flat = preg_replace('/\s+/', '', $display);
+        $flat = preg_replace('/\s+/', '', $tester->getDisplay());
         $this->assertStringContainsString('Sneaky', $flat);
         $this->assertStringContainsString('asaplainproperty', $flat);
     }

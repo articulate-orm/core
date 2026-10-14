@@ -163,6 +163,45 @@ PHP);
         $this->assertStringContainsString('lenient mode', $tester->getDisplay());
     }
 
+    public function testSiblingMappingVersionColumnAsPlainPropertyErrors(): void
+    {
+        $ns = $this->uniqueNamespace();
+
+        $this->writeFixture('Owner.php', $ns, <<<'PHP'
+#[\Articulate\Attributes\Entity(tableName: 'vg_plain')]
+class Owner {
+    #[\Articulate\Attributes\Indexes\PrimaryKey]
+    public ?int $id = null;
+
+    #[\Articulate\Attributes\Version]
+    public int $version = 0;
+
+    #[\Articulate\Attributes\Property]
+    public string $status = '';
+}
+PHP);
+
+        $this->writeFixture('Sneaky.php', $ns, <<<'PHP'
+#[\Articulate\Attributes\Entity(tableName: 'vg_plain')]
+#[\Articulate\Attributes\VersionAware(['version'])]
+class Sneaky {
+    #[\Articulate\Attributes\Indexes\PrimaryKey]
+    public ?int $id = null;
+
+    #[\Articulate\Attributes\Property]
+    public int $version = 0;
+}
+PHP);
+
+        $tester = $this->runValidate(input: ['--lenient' => true]);
+
+        $this->assertSame(1, $tester->getStatusCode());
+        $display = $tester->getDisplay();
+        $flat = preg_replace('/\s+/', '', $display);
+        $this->assertStringContainsString('Sneaky', $flat);
+        $this->assertStringContainsString('asaplainproperty', $flat);
+    }
+
     public function testSliceOwningItsOwnVersionOverTheColumnValidatesClean(): void
     {
         $ns = $this->uniqueNamespace();

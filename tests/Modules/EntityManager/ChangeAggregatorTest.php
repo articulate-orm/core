@@ -5,9 +5,12 @@ namespace Articulate\Tests\Modules\EntityManager;
 use Articulate\Attributes\Entity;
 use Articulate\Attributes\Property;
 use Articulate\Connection;
+use Articulate\Exceptions\UpdateConflictException;
 use Articulate\Modules\EntityManager\ChangeAggregator;
 use Articulate\Modules\EntityManager\EntityManager;
 use Articulate\Modules\EntityManager\UnitOfWork;
+use Articulate\Modules\EntityManager\UpdateConflictResolutionStrategy;
+use Articulate\Schema\EntityMetadataRegistry;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\AbstractLogger;
 
@@ -18,6 +21,20 @@ class ChangeAggregatorTestLogger extends AbstractLogger {
     public function log($level, string|\Stringable $message, array $context = []): void
     {
         $this->records[] = ['level' => (string) $level, 'message' => (string) $message, 'context' => $context];
+    }
+}
+
+class MalformedUpdateConflictResolutionStrategy implements UpdateConflictResolutionStrategy {
+    /**
+     * @param array<int, array{entity: object, changes: array<string, mixed>}> $updates
+     * @return array<int, array{entity: object, changes: array<string, mixed>}>
+     */
+    public function resolve(array $updates, EntityMetadataRegistry $metadataRegistry): array
+    {
+        /** @var array<int, array{entity: object, changes: array<string, mixed>}> $missingEntity */
+        $missingEntity = [['changes' => ['name' => 'orphan']]];
+
+        return $missingEntity;
     }
 }
 
@@ -266,7 +283,27 @@ class ChangeAggregatorTest extends TestCase {
 
         $this->assertCount(1, $result['deletes']);
         $this->assertCount(1, $result['updates'], 'Update for a different entity (different id) must survive delete-filtering');
-        $this->assertSame($toUpdate, $result['updates'][0]['entity']);
+        $this->assertSame($toUpdate, $result['updates'][0]->entity);
+    }
+
+    public function testMalformedStrategyOutputThrowsNamingTheStrategy(): void
+    {
+        $aggregator = new ChangeAggregator(
+            $this->entityManager->getMetadataRegistry(),
+            new MalformedUpdateConflictResolutionStrategy(),
+        );
+
+        $uow = new UnitOfWork(metadataRegistry: $this->entityManager->getMetadataRegistry());
+        $entity = new TestEntityForChangeAggregation();
+        $entity->id = 1;
+        $entity->name = 'Original';
+        $uow->registerManaged($entity, ['id' => 1, 'name' => 'Original', 'active' => true]);
+        $entity->name = 'Changed';
+
+        $this->expectException(UpdateConflictException::class);
+        $this->expectExceptionMessage(MalformedUpdateConflictResolutionStrategy::class);
+
+        $aggregator->aggregateChanges([$uow]);
     }
 }
 

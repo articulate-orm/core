@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   downgraded) and on a slice persisting a column inside another slice's guard set without
   its own `#[Version]` or a `#[VersionAware]` acknowledgement. A new `--lenient` flag
   downgrades the missing-acknowledgement error to a warning.
+- `articulate:validate` errors on a slice mapping another slice's `#[Version]` column as
+  a plain `#[Property]`, which could otherwise overwrite the counter unchecked. Never
+  downgraded; `#[VersionAware]` does not clear it.
 
 ## [1.2.1]
 

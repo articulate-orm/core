@@ -96,7 +96,9 @@ class ValidateCommand extends Command {
      *    nor a #[VersionAware] naming that version column (downgraded to a
      *    warning when $lenient is set);
      *  - error ("rival counters") when two distinct #[Version] columns have
-     *    overlapping guard sets (never downgraded).
+     *    overlapping guard sets (never downgraded);
+     *  - error when a slice maps another slice's #[Version] column as a plain
+     *    property (never downgraded, not cleared by #[VersionAware]).
      *
      * @param ReflectionEntity[] $entityClasses
      * @return array{errors: int, warnings: int}

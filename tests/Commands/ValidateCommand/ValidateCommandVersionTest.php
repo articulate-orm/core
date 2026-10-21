@@ -91,6 +91,7 @@ class ValidateCommandVersionTest extends TestCase {
         $flat = preg_replace('/\s+/', '', $tester->getDisplay());
         $this->assertStringContainsString('Sneaky', $flat);
         $this->assertStringContainsString('asaplainproperty', $flat);
+        $this->assertStringNotContainsString('PlainVersionColumn\\Owner', $flat);
     }
 
     public function testSliceOwningItsOwnVersionOverTheColumnValidatesClean(): void

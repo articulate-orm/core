@@ -104,7 +104,7 @@ class EntityManager {
         $this->filters = new FilterCollection();
         $this->cacheCoordinator = new EntityCacheCoordinator($resultCache, $this->metadataRegistry, $secondLevelCache, $secondLevelCacheTtl);
         $this->dependencySorter = new EntityDependencySorter($this->metadataRegistry);
-        $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->dependencySorter);
+        $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->dependencySorter, $this->metadataRegistry);
         $this->readService = new EntityReadService(
             $this->connection,
             $this->hydrator,
@@ -162,10 +162,8 @@ class EntityManager {
             $this->cacheCoordinator->invalidateSecondLevelCache($aggregatedChanges);
             $this->cacheCoordinator->incrementQueryCacheGeneration();
 
-            // Bump the in-memory #[Version] properties before post-update callbacks so a
-            // #[PostUpdate] handler sees the value the row now carries. The catch block
-            // reverts them if the flush never commits, so a mid-flush conflict still
-            // can't strand a stale version and poison later retries.
+            // Committed before post-update callbacks so #[PostUpdate] sees the value the row now
+            // carries; the catch block abandons them so a failed flush leaves the pre-flush version.
             foreach ($versionedRowWrites as $write) {
                 $write->commit();
             }

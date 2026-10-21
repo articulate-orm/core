@@ -177,7 +177,6 @@ class QueryExecutor {
         }
 
         $reflectionEntity = $this->getReflectionEntity($entity::class);
-        $tableName = $reflectionEntity->getTableName();
         $metadata = $this->entityMetadataCache[$entity::class] ??= new EntityMetadata($entity::class);
 
         // Prepare SET clause from changes
@@ -225,15 +224,14 @@ class QueryExecutor {
 
         [$whereClause, $whereValues] = $this->buildWhereClause($entity);
 
-        return $this->versionedRowWrite->execute($tableName, $metadata, $entity, $setParts, $values, $whereClause, $whereValues);
+        return $this->versionedRowWrite->execute($metadata, $entity, $setParts, $values, $whereClause, $whereValues);
     }
 
     /**
-     * Soft-deletes one entity's row through the versioned row write.
+     * Metadata is passed in (registry-resolved) so the PSR-6 metadata cache and table index are honored.
      */
-    public function executeSoftDelete(object $entity): ?VersionedRowWriteHandle
+    public function executeSoftDelete(object $entity, EntityMetadata $metadata): ?VersionedRowWriteHandle
     {
-        $metadata = $this->entityMetadataCache[$entity::class] ??= new EntityMetadata($entity::class);
         $softDeleteColumn = $metadata->getSoftDeleteColumn();
 
         if ($softDeleteColumn === null) {
@@ -243,7 +241,6 @@ class QueryExecutor {
         $where = $this->buildEntityWhereClause($entity);
 
         return $this->versionedRowWrite->execute(
-            $metadata->getTableName(),
             $metadata,
             $entity,
             ["{$softDeleteColumn} = ?"],

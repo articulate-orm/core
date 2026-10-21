@@ -2,10 +2,13 @@
 
 namespace Articulate\Modules\EntityManager;
 
+use Articulate\Schema\EntityMetadataRegistry;
+
 class ChangeSetExecutor {
     public function __construct(
         private readonly QueryExecutor $queryExecutor,
         private readonly EntityDependencySorter $dependencySorter,
+        private readonly EntityMetadataRegistry $metadataRegistry,
     ) {
     }
 
@@ -57,7 +60,7 @@ class ChangeSetExecutor {
         }
 
         foreach ($changes['softDeletes'] as $entity) {
-            $handle = $this->queryExecutor->executeSoftDelete($entity);
+            $handle = $this->queryExecutor->executeSoftDelete($entity, $this->metadataRegistry->getMetadata($entity::class));
             if ($handle !== null) {
                 $handles[] = $handle;
             }

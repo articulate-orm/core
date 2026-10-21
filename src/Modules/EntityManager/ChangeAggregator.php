@@ -58,27 +58,29 @@ class ChangeAggregator {
 
     private function toFlushUpdate(mixed $update): EntityUpdate|MergedUpdate
     {
-        if (!is_array($update)) {
-            throw UpdateConflictException::malformedStrategyOutput($this->updateConflictResolutionStrategy::class);
+        if (
+            is_array($update)
+            && is_string($update['table'] ?? null)
+            && (!isset($update['entity']) || is_object($update['entity']))
+            && is_array($update['set'] ?? null)
+            && is_string($update['where'] ?? null)
+            && is_array($update['whereValues'] ?? null)
+        ) {
+            return new MergedUpdate(
+                table: $update['table'],
+                entity: $update['entity'] ?? null,
+                set: $update['set'],
+                where: $update['where'],
+                whereValues: $update['whereValues'],
+            );
         }
 
-        if (isset($update['table'])) {
-            if (
-                is_string($update['table'])
-                && (!isset($update['entity']) || is_object($update['entity']))
-                && is_array($update['set'] ?? null)
-                && is_string($update['where'] ?? null)
-                && is_array($update['whereValues'] ?? null)
-            ) {
-                return new MergedUpdate(
-                    table: $update['table'],
-                    entity: $update['entity'] ?? null,
-                    set: $update['set'],
-                    where: $update['where'],
-                    whereValues: $update['whereValues'],
-                );
-            }
-        } elseif (is_object($update['entity'] ?? null) && is_array($update['changes'] ?? null)) {
+        if (
+            is_array($update)
+            && !isset($update['table'])
+            && is_object($update['entity'] ?? null)
+            && is_array($update['changes'] ?? null)
+        ) {
             return new EntityUpdate($update['entity'], $update['changes']);
         }
 

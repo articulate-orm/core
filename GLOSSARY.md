@@ -31,3 +31,9 @@ _Avoid_: opt-out, waiver
 **Rival counters**:
 Two different version columns on one table whose guard sets overlap.
 _Avoid_: competing versions, duplicate versions
+
+**Unacknowledged guarded write**:
+A slice persisting a column in a sibling's guard set with neither its own `#[Version]` over that version column nor an acknowledgement of it.
+
+**Plain version column**:
+A sibling's version column mapped by a slice as an ordinary property, letting it overwrite the counter.

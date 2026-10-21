@@ -5,19 +5,9 @@ namespace Articulate\Schema\VersionGuard;
 use Articulate\Schema\EntityMetadata;
 
 /**
- * The per-slice version-guard rules of ADR-0001, applied across all slices of
- * each table:
- *
- *  - rival counters: two distinct version columns whose guard sets overlap;
- *  - plain version column: a slice maps a sibling's version column as a plain
- *    property and could overwrite the counter (an acknowledgement does not
- *    clear it);
- *  - unacknowledged guarded write: a slice persists a column in a sibling's
- *    guard set without its own #[Version] over that version column or a
- *    #[VersionAware] acknowledgement of it.
- *
- * Findings come per table in discovery order: rival counters first, then each
- * slice's plain-version-column findings before its unacknowledged writes.
+ * Finding order is a CLI contract (scripts grep validate output): per table in
+ * discovery order, rival counters first, then each slice's plain-version-column
+ * findings before its unacknowledged writes.
  */
 final class SliceVersionGuardCheck {
     /**
@@ -31,22 +21,22 @@ final class SliceVersionGuardCheck {
         }
 
         $findings = [];
-        foreach ($slicesByTable as $table => $siblings) {
-            array_push($findings, ...$this->checkTable($table, $siblings));
+        foreach ($slicesByTable as $table => $tableSlices) {
+            array_push($findings, ...$this->checkTable($table, $tableSlices));
         }
 
         return $findings;
     }
 
     /**
-     * @param list<EntityMetadata> $siblings
+     * @param list<EntityMetadata> $tableSlices
      * @return list<VersionGuardFinding>
      */
-    private function checkTable(string $table, array $siblings): array
+    private function checkTable(string $table, array $tableSlices): array
     {
-        $guardSets = $this->guardSets($siblings);
+        $guardSets = $this->guardSets($tableSlices);
         $findings = $this->rivalCounters($table, $guardSets);
-        foreach ($siblings as $slice) {
+        foreach ($tableSlices as $slice) {
             array_push($findings, ...$this->plainVersionColumns($table, $slice, $guardSets));
             array_push($findings, ...$this->unacknowledgedGuardedWrites($table, $slice, $guardSets));
         }
@@ -58,13 +48,13 @@ final class SliceVersionGuardCheck {
      * A version column's guard set is the union over every slice declaring it,
      * so splitting the declaration across slices cannot shrink it.
      *
-     * @param list<EntityMetadata> $siblings
+     * @param list<EntityMetadata> $tableSlices
      * @return array<string, array<int, string>> version column => guard set
      */
-    private function guardSets(array $siblings): array
+    private function guardSets(array $tableSlices): array
     {
         $guardSets = [];
-        foreach ($siblings as $slice) {
+        foreach ($tableSlices as $slice) {
             foreach ($slice->getVersionColumns() as $versionColumn) {
                 $guardSets[$versionColumn] = array_unique(array_merge(
                     $guardSets[$versionColumn] ?? [],

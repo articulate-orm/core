@@ -5,6 +5,7 @@ namespace Articulate\Commands;
 use Articulate\Attributes\Reflection\ReflectionEntity;
 use Articulate\Modules\Database\SchemaComparator\DatabaseSchemaComparator;
 use Articulate\Schema\EntityMetadataRegistry;
+use Articulate\Schema\VersionGuard\SliceVersionGuardCheck;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -23,6 +24,7 @@ class ValidateCommand extends Command {
         private readonly EntityClassDiscovery $entityClassDiscovery = new EntityClassDiscovery(),
         private readonly EntityMetadataRegistry $metadataRegistry = new EntityMetadataRegistry(),
         private readonly bool $lenientVersionChecks = false,
+        private readonly SliceVersionGuardCheck $sliceVersionGuardCheck = new SliceVersionGuardCheck(),
     ) {
         parent::__construct();
     }
@@ -60,7 +62,7 @@ class ValidateCommand extends Command {
         }
 
         $lenient = $this->lenientVersionChecks || $input->getOption('lenient');
-        $versionResult = $this->validateVersionColumns($entityClasses, $io, $lenient);
+        $versionResult = $this->reportVersionGuardFindings($entityClasses, $io, $lenient);
         $hasVersionErrors = $versionResult['errors'] > 0;
         $hasVersionWarnings = $versionResult['warnings'] > 0;
 
@@ -88,120 +90,28 @@ class ValidateCommand extends Command {
     }
 
     /**
-     * Per-slice version-guard validation. Group entity classes by table; for
-     * each #[Version] column compute its owning slice's guard set, then:
-     *
-     *  - error when a slice persists a column that is in another slice's guard
-     *    set and the slice has neither its own #[Version] covering that column
-     *    nor a #[VersionAware] naming that version column (downgraded to a
-     *    warning when $lenient is set);
-     *  - error ("rival counters") when two distinct #[Version] columns have
-     *    overlapping guard sets (never downgraded);
-     *  - error when a slice maps another slice's #[Version] column as a plain
-     *    property (never downgraded, not cleared by #[VersionAware]).
-     *
      * @param ReflectionEntity[] $entityClasses
      * @return array{errors: int, warnings: int}
      */
-    private function validateVersionColumns(array $entityClasses, SymfonyStyle $io, bool $lenient): array
+    private function reportVersionGuardFindings(array $entityClasses, SymfonyStyle $io, bool $lenient): array
     {
-        $errors = 0;
-        $warnings = 0;
-        $metadataByTable = [];
-
+        $slices = [];
         foreach ($entityClasses as $reflectionEntity) {
-            $metadata = $this->metadataRegistry->getMetadata($reflectionEntity->getName());
-            $metadataByTable[$metadata->getTableName()][] = $metadata;
+            $slices[] = $this->metadataRegistry->getMetadata($reflectionEntity->getName());
         }
 
-        foreach ($metadataByTable as $tableName => $metadataGroup) {
-            // version column => union of its owning slices' guard sets
-            $guardSets = [];
-            foreach ($metadataGroup as $metadata) {
-                foreach ($metadata->getVersionColumns() as $versionColumn) {
-                    $guardSets[$versionColumn] = array_values(array_unique(array_merge(
-                        $guardSets[$versionColumn] ?? [],
-                        $metadata->getGuardSet(),
-                    )));
-                }
-            }
+        $errors = 0;
+        $warnings = 0;
+        foreach ($this->sliceVersionGuardCheck->check(...$slices) as $finding) {
+            if ($lenient && $finding->kind->downgradable()) {
+                $warnings++;
+                $io->warning($finding->message());
 
-            if ($guardSets === []) {
                 continue;
             }
 
-            $versionColumns = array_keys($guardSets);
-            foreach ($versionColumns as $i => $columnA) {
-                foreach (array_slice($versionColumns, $i + 1) as $columnB) {
-                    $overlap = array_values(array_intersect($guardSets[$columnA], $guardSets[$columnB]));
-                    if ($overlap === []) {
-                        continue;
-                    }
-
-                    $errors++;
-                    $io->error(sprintf(
-                        'Rival counters on table "%s": #[Version] columns "%s" and "%s" both guard %s.',
-                        $tableName,
-                        $columnA,
-                        $columnB,
-                        implode(', ', $overlap),
-                    ));
-                }
-            }
-
-            foreach ($metadataGroup as $metadata) {
-                $ownVersionColumns = $metadata->getVersionColumns();
-                $acknowledged = $metadata->getAcknowledgedVersionColumns();
-
-                // A version column is ORM-managed. Only the slice declaring it via #[Version]
-                // gets the bump/check and the ManagedVersionColumnException guard; a sibling
-                // mapping the same column as a plain #[Property] could overwrite the counter
-                // with an arbitrary value, bypassing both. Never downgraded, #[VersionAware]
-                // does not clear it.
-                foreach (array_intersect($metadata->getColumnNames(), array_keys($guardSets)) as $versionColumn) {
-                    if (in_array($versionColumn, $ownVersionColumns, true)) {
-                        continue;
-                    }
-
-                    $errors++;
-                    $io->error(sprintf(
-                        'Class "%s" maps #[Version] column "%s" of table "%s" as a plain property; '
-                        . 'only a #[Version] property may map a version column.',
-                        $metadata->getClassName(),
-                        $versionColumn,
-                        $tableName,
-                    ));
-                }
-
-                foreach ($guardSets as $versionColumn => $guardedColumns) {
-                    if (in_array($versionColumn, $ownVersionColumns, true)) {
-                        continue;
-                    }
-
-                    $written = array_values(array_intersect($metadata->getGuardSet(), $guardedColumns));
-                    if ($written === [] || in_array($versionColumn, $acknowledged, true)) {
-                        continue;
-                    }
-
-                    $message = sprintf(
-                        'Class "%s" persists %s guarded by #[Version] column "%s" on table "%s" '
-                        . 'without its own #[Version] or a #[VersionAware([\'%s\'])] acknowledgement.',
-                        $metadata->getClassName(),
-                        implode(', ', $written),
-                        $versionColumn,
-                        $tableName,
-                        $versionColumn,
-                    );
-
-                    if ($lenient) {
-                        $warnings++;
-                        $io->warning($message);
-                    } else {
-                        $errors++;
-                        $io->error($message);
-                    }
-                }
-            }
+            $errors++;
+            $io->error($finding->message());
         }
 
         return ['errors' => $errors, 'warnings' => $warnings];

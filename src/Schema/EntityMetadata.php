@@ -339,8 +339,8 @@ class EntityMetadata {
 
     /**
      * The version columns this slice acknowledges writing without checking, via
-     * its own #[VersionAware] list. Validate-time only — no runtime path reads
-     * this.
+     * its own #[VersionAware] list. Consumed only by SliceVersionGuardCheck (run
+     * by articulate:validate) — no runtime path reads this.
      *
      * @return string[]
      */
@@ -352,8 +352,9 @@ class EntityMetadata {
     /**
      * This slice's guard set: the persisted #[Property] columns it declares,
      * excluding the primary key and its own #[Version] column. A #[Version]
-     * column protects exactly these columns against a lost update. Validate-time
-     * only — flush code never groups by table.
+     * column protects exactly these columns against a lost update. Consumed only
+     * by SliceVersionGuardCheck (run by articulate:validate) — flush code never
+     * groups by table.
      *
      * @return string[]
      */

@@ -13,7 +13,7 @@ class ChangeSetExecutor {
     }
 
     /**
-     * @param array{inserts: object[], updates: array<int, array{entity?: object, changes?: array, table?: string, set?: array, where?: string, whereValues?: array, versionBumpColumns?: string[]}>, deletes: object[], softDeletes: object[]} $changes
+     * @param array{inserts: object[], updates: array<int, array{entity?: object, changes?: array, table?: string, set?: array, where?: string, whereValues?: array}>, deletes: object[], softDeletes: object[]} $changes
      * @return list<DeferredVersionBump> In-memory #[Version] reconciliations; see EntityManager::flush().
      */
     public function execute(array $changes): array
@@ -37,7 +37,6 @@ class ChangeSetExecutor {
                     columnChanges: $update['set'],
                     whereClause: $update['where'],
                     whereValues: $update['whereValues'],
-                    versionBumpColumns: $update['versionBumpColumns'] ?? [],
                 );
 
                 continue;

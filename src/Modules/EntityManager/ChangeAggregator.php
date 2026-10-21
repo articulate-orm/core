@@ -42,9 +42,9 @@ class ChangeAggregator {
 
         return [
             'inserts' => $this->optimizeInserts(),
-            'updates' => $this->toFlushUpdates($this->updateConflictResolutionStrategy->resolve(
-                $this->optimizeUpdates(),
-                $this->metadataRegistry,
+            'updates' => array_values(array_map(
+                $this->toFlushUpdate(...),
+                $this->updateConflictResolutionStrategy->resolve($this->optimizeUpdates(), $this->metadataRegistry),
             )),
             'deletes' => $deletes,
             'softDeletes' => $this->optimizeSoftDeletes(),
@@ -56,45 +56,29 @@ class ChangeAggregator {
         $this->updateConflictResolutionStrategy = $updateConflictResolutionStrategy;
     }
 
-    /**
-     * @param array<int, mixed> $resolved
-     * @return list<EntityUpdate|MergedUpdate>
-     */
-    private function toFlushUpdates(array $resolved): array
-    {
-        $updates = [];
-        foreach ($resolved as $update) {
-            $updates[] = $this->toFlushUpdate($update);
-        }
-
-        return $updates;
-    }
-
     private function toFlushUpdate(mixed $update): EntityUpdate|MergedUpdate
     {
-        if (
-            is_array($update)
-            && is_string($update['table'] ?? null)
-            && (!isset($update['entity']) || is_object($update['entity']))
-            && is_array($update['set'] ?? null)
-            && is_string($update['where'] ?? null)
-            && is_array($update['whereValues'] ?? null)
-        ) {
-            return new MergedUpdate(
-                table: $update['table'],
-                entity: $update['entity'] ?? null,
-                set: $update['set'],
-                where: $update['where'],
-                whereValues: $update['whereValues'],
-            );
+        if (!is_array($update)) {
+            throw UpdateConflictException::malformedStrategyOutput($this->updateConflictResolutionStrategy::class);
         }
 
-        if (
-            is_array($update)
-            && !isset($update['table'])
-            && is_object($update['entity'] ?? null)
-            && is_array($update['changes'] ?? null)
-        ) {
+        if (isset($update['table'])) {
+            if (
+                is_string($update['table'])
+                && (!isset($update['entity']) || is_object($update['entity']))
+                && is_array($update['set'] ?? null)
+                && is_string($update['where'] ?? null)
+                && is_array($update['whereValues'] ?? null)
+            ) {
+                return new MergedUpdate(
+                    table: $update['table'],
+                    entity: $update['entity'] ?? null,
+                    set: $update['set'],
+                    where: $update['where'],
+                    whereValues: $update['whereValues'],
+                );
+            }
+        } elseif (is_object($update['entity'] ?? null) && is_array($update['changes'] ?? null)) {
             return new EntityUpdate($update['entity'], $update['changes']);
         }
 

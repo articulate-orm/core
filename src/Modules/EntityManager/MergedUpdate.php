@@ -9,7 +9,7 @@ final readonly class MergedUpdate {
      */
     public function __construct(
         public string $table,
-        public object $entity,
+        public ?object $entity,
         public array $set,
         public string $where,
         public array $whereValues,

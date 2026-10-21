@@ -42,7 +42,7 @@ class ChangeAggregator {
 
         return [
             'inserts' => $this->optimizeInserts(),
-            'updates' => $this->typeUpdates($this->updateConflictResolutionStrategy->resolve(
+            'updates' => $this->toFlushUpdates($this->updateConflictResolutionStrategy->resolve(
                 $this->optimizeUpdates(),
                 $this->metadataRegistry,
             )),
@@ -60,29 +60,29 @@ class ChangeAggregator {
      * @param array<int, mixed> $resolved
      * @return list<EntityUpdate|MergedUpdate>
      */
-    private function typeUpdates(array $resolved): array
+    private function toFlushUpdates(array $resolved): array
     {
         $updates = [];
         foreach ($resolved as $update) {
-            $updates[] = $this->typeUpdate($update);
+            $updates[] = $this->toFlushUpdate($update);
         }
 
         return $updates;
     }
 
-    private function typeUpdate(mixed $update): EntityUpdate|MergedUpdate
+    private function toFlushUpdate(mixed $update): EntityUpdate|MergedUpdate
     {
         if (
             is_array($update)
             && is_string($update['table'] ?? null)
-            && is_object($update['entity'] ?? null)
+            && (!isset($update['entity']) || is_object($update['entity']))
             && is_array($update['set'] ?? null)
             && is_string($update['where'] ?? null)
             && is_array($update['whereValues'] ?? null)
         ) {
             return new MergedUpdate(
                 table: $update['table'],
-                entity: $update['entity'],
+                entity: $update['entity'] ?? null,
                 set: $update['set'],
                 where: $update['where'],
                 whereValues: $update['whereValues'],
@@ -98,10 +98,7 @@ class ChangeAggregator {
             return new EntityUpdate($update['entity'], $update['changes']);
         }
 
-        throw new UpdateConflictException(sprintf(
-            '%s::resolve() returned an update matching neither the entity-update nor the merged-update shape.',
-            $this->updateConflictResolutionStrategy::class,
-        ));
+        throw UpdateConflictException::malformedStrategyOutput($this->updateConflictResolutionStrategy::class);
     }
 
     /**

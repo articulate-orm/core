@@ -1,6 +1,6 @@
 # Spec: type the flush update list; delete dead merge version code
 
-Status: agreed, not started
+Status: done
 Origin: architecture review 2026-10-21, candidate 2
 Terms: **entity update**, **merged update** — see `CONTEXT.md` § Flush
 
@@ -32,7 +32,10 @@ a design ADR-0001 removed. The strategy's input-side `isset($update['table'])` (
    deferred to a 3.0 if a custom strategy ever needs it.
 3. **Two readonly classes, no shared interface**, used as the union `EntityUpdate|MergedUpdate`.
 4. **`MergedUpdate` keeps a single `entity`** (the first contributor), matching today. Sibling
-   eviction in the cache already covers every slice on the row.
+   eviction in the cache already covers every slice on the row. `entity` is nullable: the 2.0.0
+   merged shape `{table, set, where, whereValues}` has no `entity` key, so a 2.0.0-conformant
+   custom strategy may omit it. A null `entity` skips second-level cache eviction, matching the
+   pre-typing `isset($update['entity'])` behaviour.
 5. **Malformed strategy output throws `UpdateConflictException`** naming the strategy class. No new
    exception type.
 6. **Only `updates` is typed.** `aggregateChanges()` keeps its outer
@@ -56,7 +59,7 @@ a design ADR-0001 removed. The strategy's input-side `isset($update['table'])` (
 ### Commit 2 — type the update list
 
 - Add `final readonly class EntityUpdate(object $entity, array $changes)`.
-- Add `final readonly class MergedUpdate(string $table, object $entity, array $set, string $where, array $whereValues)`.
+- Add `final readonly class MergedUpdate(string $table, ?object $entity, array $set, string $where, array $whereValues)`.
 - `ChangeAggregator::aggregateChanges()`: map `resolve()` output to
   `list<EntityUpdate|MergedUpdate>`; anything matching neither shape →
   `UpdateConflictException` naming `$this->updateConflictResolutionStrategy::class`.
@@ -69,8 +72,10 @@ a design ADR-0001 removed. The strategy's input-side `isset($update['table'])` (
 - New (write first): a stub `UpdateConflictResolutionStrategy` returning a malformed shape →
   `aggregateChanges()` throws `UpdateConflictException`.
 - `ChangeAggregatorTest:269`: `$result['updates'][0]['entity']` → `->entity`.
-- Unchanged: `MergeUpdateConflictResolutionStrategyTest`, `ThrowOnUpdateConflictStrategyTest`
-  (public contract unchanged).
+- Unchanged: `ThrowOnUpdateConflictStrategyTest` (public contract unchanged).
+  `MergeUpdateConflictResolutionStrategyTest` is unchanged except that its two raw-table
+  pass-through tests were removed with commit 1 (they covered the deleted input-side
+  `isset($update['table'])` branch).
 - Regression: `OptimisticLockingTest`, `tests/EdgeCases/SharedTableEntitiesTest.php` on MySQL and
   PostgreSQL.
 - Gates: `composer cs:check`, `composer static:check`, `composer architecture:check`, `composer test`.

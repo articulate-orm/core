@@ -60,7 +60,9 @@ class EntityCacheCoordinator {
         }
 
         foreach ($changes['updates'] as $update) {
-            $this->evictEntityFromSecondLevelCache($update->entity);
+            if ($update->entity !== null) {
+                $this->evictEntityFromSecondLevelCache($update->entity);
+            }
         }
 
         foreach ($changes['deletes'] as $entity) {

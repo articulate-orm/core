@@ -59,17 +59,17 @@ final class SliceVersionGuardCheck {
      * so splitting the declaration across slices cannot shrink it.
      *
      * @param list<EntityMetadata> $siblings
-     * @return array<string, list<string>> version column => guard set
+     * @return array<string, array<int, string>> version column => guard set
      */
     private function guardSets(array $siblings): array
     {
         $guardSets = [];
         foreach ($siblings as $slice) {
             foreach ($slice->getVersionColumns() as $versionColumn) {
-                $guardSets[$versionColumn] = array_values(array_unique(array_merge(
+                $guardSets[$versionColumn] = array_unique(array_merge(
                     $guardSets[$versionColumn] ?? [],
                     $slice->getGuardSet(),
-                )));
+                ));
             }
         }
 
@@ -77,7 +77,7 @@ final class SliceVersionGuardCheck {
     }
 
     /**
-     * @param array<string, list<string>> $guardSets
+     * @param array<string, array<int, string>> $guardSets
      * @return list<VersionGuardFinding>
      */
     private function rivalCounters(string $table, array $guardSets): array
@@ -109,7 +109,7 @@ final class SliceVersionGuardCheck {
      * and the ManagedVersionColumnException guard; a sibling mapping it as a plain
      * property bypasses both.
      *
-     * @param array<string, list<string>> $guardSets
+     * @param array<string, array<int, string>> $guardSets
      * @return list<VersionGuardFinding>
      */
     private function plainVersionColumns(string $table, EntityMetadata $slice, array $guardSets): array
@@ -133,7 +133,7 @@ final class SliceVersionGuardCheck {
     }
 
     /**
-     * @param array<string, list<string>> $guardSets
+     * @param array<string, array<int, string>> $guardSets
      * @return list<VersionGuardFinding>
      */
     private function unacknowledgedGuardedWrites(string $table, EntityMetadata $slice, array $guardSets): array

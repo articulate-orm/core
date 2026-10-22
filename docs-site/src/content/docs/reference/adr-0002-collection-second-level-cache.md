@@ -125,8 +125,8 @@ case, costing nothing beyond the hydration lookup already being performed.
 ### Module placement
 
 New `src/Modules/Cache/` module holds only the new code: `CollectionCacheInterface` +
-`CollectionCache` (PSR-6-backed storage for id-lists and reverse-index entries, key prefixes `l2q:`/
-`l2qidx:`, distinct from `SecondLevelCache::generateKey()`'s plain per-entity hash) and
+`CollectionCache` (PSR-6-backed storage for id-lists and reverse-index entries, key prefixes `l2q_`/
+`l2qidx_` (PSR-6 reserves `:`), distinct from `SecondLevelCache::generateKey()`'s plain per-entity hash) and
 `NullCollectionCache` (no-op Null Object, always miss). The existing `SecondLevelCache`/
 `EntityCacheCoordinator` in `EntityManager` are untouched — zero breaking change to that public
 namespace. `EntityCacheCoordinator` gains a dependency on the new `Cache` module to drive reverse-index

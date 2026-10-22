@@ -312,4 +312,14 @@ class QueryResultSecondLevelCacheTest extends TestCase {
 
         $this->assertNotSame($a->buildCacheKey(null, 'SELECT 1', []), $b->buildCacheKey(null, 'SELECT 1', []));
     }
+
+    public function testObjectParamKeyIncludesTheObjectTag(): void
+    {
+        $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
+        $object = new QbCachePrivateFieldParam(1);
+
+        $expected = 'cq_' . hash('sha256', serialize(['', '', 'SELECT 1', [['o', QbCachePrivateFieldParam::class, serialize($object)]]]));
+
+        $this->assertSame($expected, $cache->buildCacheKey(null, 'SELECT 1', [$object]));
+    }
 }

@@ -12,6 +12,7 @@ use Articulate\Modules\EntityManager\SecondLevelCache;
 use Articulate\QueryLogger\QueryLoggerInterface;
 use Articulate\Tests\DatabaseTestCase;
 use Articulate\Tests\Modules\QueryBuilder\Fixtures\QbCacheCompositeStock;
+use Articulate\Tests\Modules\QueryBuilder\Fixtures\QbCachePet;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Cache\CacheItemInterface;
 use Psr\Cache\CacheItemPoolInterface;
@@ -490,6 +491,71 @@ class QueryBuilderCacheableTest extends DatabaseTestCase {
         $this->assertSame(1, $logger->selectCount);
         $this->assertSame(1, $cache->getItemCalls - $getItemBefore, 'Only the id-list lookup uses getItem().');
         $this->assertSame(1, $cache->getItemsCalls - $getItemsBefore, 'All entities resolve in one getItems() call.');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testPartiallyResolvableIdListFallsBackToTheDatabase(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        foreach (['A', 'B', 'C'] as $name) {
+            $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', [$name, 1]);
+        }
+        $lastId = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'qb_cache_products_id_seq' : null);
+
+        $cache = new QbArrayCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+        $em->clear();
+
+        $evictedKey = (new SecondLevelCache($cache, 3600, $loggedConnection->getCacheNamespace()))->generateKey(QbCacheProduct::class, $lastId);
+        $cache->deleteItem($evictedKey);
+
+        $result = $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+
+        $this->assertSame(['A', 'B', 'C'], array_map(fn (object $p): string => $p->name, $result));
+        $this->assertSame(2, $logger->selectCount, 'One unresolvable id must discard the whole cached list, not return a partial one.');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testRowsWithRelationColumnsAreCachedAndResolvedFromCache(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createPetTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_cache_pets (name, owner_id) VALUES (?, ?)', ['Rex', 7]);
+        $id = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'qb_cache_pets_id_seq' : null);
+
+        $cache = new QbArrayCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        $em->createQueryBuilder(QbCachePet::class)->cacheable()->getResult();
+
+        $entityKey = (new SecondLevelCache($cache, 3600, $loggedConnection->getCacheNamespace()))->generateKey(QbCachePet::class, $id);
+        $this->assertTrue($cache->hasItem($entityKey), 'The FK column belongs to the entity and must not stop its row being cached.');
+
+        $em->clear();
+        $result = $em->createQueryBuilder(QbCachePet::class)->cacheable()->getResult();
+
+        $this->assertSame('Rex', $result[0]->name);
+        $this->assertSame(1, $logger->selectCount);
+    }
+
+    private function createPetTable(Connection $connection, string $databaseName): void
+    {
+        $connection->executeQuery('DROP TABLE IF EXISTS qb_cache_pets' . ($databaseName === 'pgsql' ? ' CASCADE' : ''));
+        $serial = $databaseName === 'pgsql' ? 'SERIAL' : 'INT AUTO_INCREMENT';
+        $connection->executeQuery(
+            'CREATE TABLE qb_cache_pets (id ' . $serial . ' PRIMARY KEY, name VARCHAR(255) NOT NULL, owner_id INT NULL)'
+        );
     }
 
     public function testConnectionsToDifferentDatabasesGetDifferentCacheNamespaces(): void

@@ -29,7 +29,8 @@
         "infection/infection": "dev-master",
         "deptrac/deptrac": "^4.6",
         "phpmd/phpmd": "^2.15",
-        "phpstan/phpstan": "^2.0"
+        "phpstan/phpstan": "^2.0",
+        "symfony/cache": "^8.0"
     },
     "require": {
         "php": ">=8.4",

@@ -6,6 +6,7 @@ use Articulate\Modules\Cache\CollectionCache;
 use PHPUnit\Framework\TestCase;
 use Psr\Cache\CacheItemInterface;
 use Psr\Cache\CacheItemPoolInterface;
+use Symfony\Component\Cache\Adapter\ArrayAdapter;
 
 class CacheItem implements CacheItemInterface {
     private mixed $value = null;
@@ -267,6 +268,29 @@ class CollectionCacheTest extends TestCase {
 
         $cache->setIdList('some-key', [1], 60);
 
-        $this->assertArrayHasKey('l2q:some-key', $pool->items, 'CollectionCache must namespace id-list keys under the l2q: prefix.');
+        $this->assertArrayHasKey('l2q_some-key', $pool->items, 'CollectionCache must namespace id-list keys under the l2q_ prefix.');
+    }
+
+    public function testRoundTripsThroughAPoolThatValidatesPsr6Keys(): void
+    {
+        $pool = new ArrayAdapter();
+        $cache = new CollectionCache($pool);
+
+        $cache->setIdList('cq_' . hash('sha256', 'x'), [1, 2, 3], 60);
+
+        $this->assertSame([1, 2, 3], $cache->getIdList('cq_' . hash('sha256', 'x')));
+        $this->assertTrue($pool->hasItem('l2q_cq_' . hash('sha256', 'x')));
+    }
+
+    public function testKeyPrefixHasNoPsr6ReservedCharacters(): void
+    {
+        $pool = new SaveOnlyCachePool();
+        $cache = new CollectionCache($pool);
+
+        $cache->setIdList('k', [1], 60);
+
+        foreach (array_keys($pool->saved) as $key) {
+            $this->assertSame(0, preg_match('/[{}()\\/\\\\@:]/', $key), $key);
+        }
     }
 }

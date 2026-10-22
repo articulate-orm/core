@@ -7,6 +7,8 @@ namespace Articulate\Modules\Cache;
  * QueryBuilder query (not the row data itself). See ADR-0002.
  */
 interface CollectionCacheInterface {
+    public const DEFAULT_TTL = 3600;
+
     /**
      * @return list<mixed>|null null on cache miss
      */

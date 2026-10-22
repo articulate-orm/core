@@ -6,9 +6,12 @@ use Articulate\Attributes\Entity;
 use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Property;
 use Articulate\Connection;
+use Articulate\Exceptions\TransactionRequiredException;
 use Articulate\Modules\EntityManager\EntityManager;
+use Articulate\Modules\EntityManager\SecondLevelCache;
 use Articulate\QueryLogger\QueryLoggerInterface;
 use Articulate\Tests\DatabaseTestCase;
+use Articulate\Tests\Modules\QueryBuilder\Fixtures\QbCacheCompositeStock;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Cache\CacheItemInterface;
 use Psr\Cache\CacheItemPoolInterface;
@@ -116,6 +119,61 @@ class QbArrayCachePool implements CacheItemPoolInterface {
 
     public function commit(): bool
     {
+        return true;
+    }
+}
+
+class QbCountingCachePool extends QbArrayCachePool {
+    public int $getItemCalls = 0;
+
+    public int $getItemsCalls = 0;
+
+    public int $saveCalls = 0;
+
+    public int $saveDeferredCalls = 0;
+
+    public int $commitCalls = 0;
+
+    public function getItem(string $key): CacheItemInterface
+    {
+        $this->getItemCalls++;
+
+        return $this->items[$key] ??= new QbCacheItem($key);
+    }
+
+    /**
+     * @param string[] $keys
+     * @return iterable<string, CacheItemInterface>
+     */
+    public function getItems(array $keys = []): iterable
+    {
+        $this->getItemsCalls++;
+        $result = [];
+        foreach ($keys as $key) {
+            $result[$key] = $this->items[$key] ??= new QbCacheItem($key);
+        }
+
+        return $result;
+    }
+
+    public function save(CacheItemInterface $item): bool
+    {
+        $this->saveCalls++;
+
+        return parent::save($item);
+    }
+
+    public function saveDeferred(CacheItemInterface $item): bool
+    {
+        $this->saveDeferredCalls++;
+
+        return parent::save($item);
+    }
+
+    public function commit(): bool
+    {
+        $this->commitCalls++;
+
         return true;
     }
 }
@@ -296,6 +354,195 @@ class QueryBuilderCacheableTest extends DatabaseTestCase {
             $logger->selectCount,
             'find() for an id already resolved via the cache must hit the identity map, not the database.'
         );
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testCacheableWithLockBypassesCacheAndStillLocks(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+
+        $cache = new QbArrayCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        if (!$loggedConnection->inTransaction()) {
+            $loggedConnection->beginTransaction();
+        }
+
+        $first = $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->lock()->cacheable();
+        $this->assertStringEndsWith('FOR UPDATE', $first->getSQL());
+        $first->getResult();
+        $em->clear();
+        $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->lock()->cacheable()->getResult();
+
+        $this->assertSame(2, $logger->selectCount, 'A locked query must always reach the database.');
+        $this->assertSame([], array_filter(array_keys($cache->items), fn (string $key): bool => $cache->hasItem($key)), 'A locked query must not write to the pool.');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testCacheableWithLockOutsideTransactionStillThrows(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        if ($connection->inTransaction()) {
+            $connection->rollbackTransaction();
+        }
+
+        $this->expectException(TransactionRequiredException::class);
+
+        $em = new EntityManager($connection, secondLevelCache: new QbArrayCachePool());
+        $em->createQueryBuilder(QbCacheProduct::class)->lock()->cacheable()->getResult();
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testCompositePrimaryKeyEntitiesAreNotIdListCached(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createStockTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_cache_stock (warehouse_id, product_id, quantity) VALUES (1, 1, 5)');
+        $connection->executeQuery('INSERT INTO qb_cache_stock (warehouse_id, product_id, quantity) VALUES (1, 2, 7)');
+
+        $cache = new QbArrayCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        $first = $em->createQueryBuilder(QbCacheCompositeStock::class)->orderBy('product_id')->cacheable()->getResult();
+        $em->clear();
+        $second = $em->createQueryBuilder(QbCacheCompositeStock::class)->orderBy('product_id')->cacheable()->getResult();
+
+        $this->assertCount(2, $first);
+        $this->assertSame([5, 7], array_map(fn (object $stock): int => $stock->quantity, $second));
+        $this->assertSame(2, $logger->selectCount);
+        $this->assertSame([], array_filter(array_keys($cache->items), fn (string $key): bool => $cache->hasItem($key)), 'Nothing may be written to the pool for composite-key entities.');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testRowsWithNonEntityColumnsAreNotPouredIntoEntityCache(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->createLabelTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+        $id = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'qb_cache_products_id_seq' : null);
+        $connection->executeQuery('INSERT INTO qb_cache_labels (product_id, label) VALUES (?, ?)', [$id, 'sale']);
+
+        $cache = new QbArrayCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        $build = fn () => $em->createQueryBuilder(QbCacheProduct::class)
+            ->select('*')
+            ->join('qb_cache_labels', 'qb_cache_labels.product_id = qb_cache_products.id')
+            ->cacheable();
+
+        $this->assertCount(1, $build()->getResult());
+
+        $entityKey = (new SecondLevelCache($cache, 3600, $loggedConnection->getCacheNamespace()))->generateKey(QbCacheProduct::class, $id);
+        $this->assertFalse($cache->hasItem($entityKey), 'A joined row must not be cached as the entity\'s own row.');
+
+        $em->clear();
+        $this->assertCount(1, $build()->getResult());
+        $this->assertSame(2, $logger->selectCount, 'Unresolvable ids must fall back to the database.');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testCacheHitUsesOneBatchReadAndMissUsesOneCommit(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        foreach (['A', 'B', 'C'] as $name) {
+            $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', [$name, 1]);
+        }
+
+        $cache = new QbCountingCachePool();
+        $logger = new SelectCountingLogger();
+        $loggedConnection = $this->withLogger($connection, $databaseName, $logger);
+        $em = new EntityManager($loggedConnection, secondLevelCache: $cache);
+
+        $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+
+        $this->assertSame(3, $cache->saveDeferredCalls, 'Entity rows are queued, one per row.');
+        $this->assertSame(1, $cache->commitCalls, 'and flushed with a single commit.');
+        $this->assertSame(1, $cache->saveCalls, 'Only the id-list is saved individually.');
+
+        $em->clear();
+        $getItemBefore = $cache->getItemCalls;
+        $getItemsBefore = $cache->getItemsCalls;
+
+        $result = $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+
+        $this->assertSame(['A', 'B', 'C'], array_map(fn (object $p): string => $p->name, $result));
+        $this->assertSame(1, $logger->selectCount);
+        $this->assertSame(1, $cache->getItemCalls - $getItemBefore, 'Only the id-list lookup uses getItem().');
+        $this->assertSame(1, $cache->getItemsCalls - $getItemsBefore, 'All entities resolve in one getItems() call.');
+    }
+
+    public function testConnectionsToDifferentDatabasesGetDifferentCacheNamespaces(): void
+    {
+        $mysql = $this->getConnection('mysql');
+        $pgsql = $this->getConnection('pgsql');
+
+        $this->assertNotSame($mysql->getCacheNamespace(), $pgsql->getCacheNamespace());
+        $this->assertSame($mysql->getCacheNamespace(), $mysql->getCacheNamespace());
+
+        $pool = new QbArrayCachePool();
+        $this->assertNotSame(
+            (new SecondLevelCache($pool, 3600, $mysql->getCacheNamespace()))->generateKey(QbCacheProduct::class, 1),
+            (new SecondLevelCache($pool, 3600, $pgsql->getCacheNamespace()))->generateKey(QbCacheProduct::class, 1),
+        );
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testEntityManagersOnDifferentDatabasesDoNotShareCacheEntries(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+        $connection->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+
+        $otherName = $databaseName === 'mysql' ? 'pgsql' : 'mysql';
+        $other = $this->getConnection($otherName);
+        $this->createProductTable($other, $otherName);
+        $other->executeQuery('INSERT INTO qb_cache_products (name, price) VALUES (?, ?)', ['Gizmo', 99]);
+
+        $shared = new QbArrayCachePool();
+        $em = new EntityManager($connection, secondLevelCache: $shared);
+        $otherEm = new EntityManager($other, secondLevelCache: $shared);
+
+        $mine = $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+        $theirs = $otherEm->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
+
+        $this->assertSame('Widget', $mine[0]->name);
+        $this->assertSame('Gizmo', $theirs[0]->name);
+    }
+
+    private function createStockTable(Connection $connection, string $databaseName): void
+    {
+        $connection->executeQuery('DROP TABLE IF EXISTS qb_cache_stock' . ($databaseName === 'pgsql' ? ' CASCADE' : ''));
+        $connection->executeQuery(
+            'CREATE TABLE qb_cache_stock (warehouse_id INT NOT NULL, product_id INT NOT NULL, quantity INT NOT NULL, PRIMARY KEY (warehouse_id, product_id))'
+        );
+    }
+
+    private function createLabelTable(Connection $connection, string $databaseName): void
+    {
+        $connection->executeQuery('DROP TABLE IF EXISTS qb_cache_labels' . ($databaseName === 'pgsql' ? ' CASCADE' : ''));
+        $connection->executeQuery('CREATE TABLE qb_cache_labels (product_id INT NOT NULL, label VARCHAR(255) NOT NULL)');
     }
 
     private function createProductTable(Connection $connection, string $databaseName): void

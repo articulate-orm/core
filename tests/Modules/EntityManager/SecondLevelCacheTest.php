@@ -179,7 +179,7 @@ class SecondLevelCacheTest extends DatabaseTestCase {
 
         $em->find(L2CacheUser::class, $id);
 
-        $key = (new SecondLevelCache($cache))->generateKey(L2CacheUser::class, $id);
+        $key = (new SecondLevelCache($cache, 3600, $connection->getCacheNamespace()))->generateKey(L2CacheUser::class, $id);
         $this->assertTrue($cache->hasItem($key));
     }
 
@@ -323,7 +323,7 @@ class SecondLevelCacheTest extends DatabaseTestCase {
 
         $em->find(L2CacheUser::class, $id);
 
-        $key = (new SecondLevelCache($cache))->generateKey(L2CacheUser::class, $id);
+        $key = (new SecondLevelCache($cache, 3600, $connection->getCacheNamespace()))->generateKey(L2CacheUser::class, $id);
         $this->assertTrue($cache->hasItem($key));
 
         sleep(2);
@@ -358,7 +358,7 @@ class SecondLevelCacheTest extends DatabaseTestCase {
         $em->flush();
         $em->clear();
 
-        $l2 = new SecondLevelCache($cache);
+        $l2 = new SecondLevelCache($cache, 3600, $connection->getCacheNamespace());
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUser::class, $id)), 'L2CacheUser cache entry should be evicted');
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUserSummary::class, $id)), 'L2CacheUserSummary cache entry should be evicted alongside sibling');
     }
@@ -388,7 +388,7 @@ class SecondLevelCacheTest extends DatabaseTestCase {
         $em->flush();
         $em->clear();
 
-        $l2 = new SecondLevelCache($cache);
+        $l2 = new SecondLevelCache($cache, 3600, $connection->getCacheNamespace());
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUser::class, $id)), 'L2CacheUser cache entry should be evicted');
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUserSummary::class, $id)), 'L2CacheUserSummary cache entry should be evicted alongside sibling');
     }

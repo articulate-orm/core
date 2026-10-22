@@ -4,6 +4,7 @@ namespace Articulate\Modules\EntityManager;
 
 use Articulate\Connection;
 use Articulate\Modules\Cache\CollectionCache;
+use Articulate\Modules\Cache\CollectionCacheInterface;
 use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Modules\QueryBuilder\Filter\FilterCollection;
 use Articulate\Modules\QueryBuilder\QueryBuilder;
@@ -26,7 +27,7 @@ class EntityReadService implements CachedEntityResolverInterface {
         private readonly ?CacheItemPoolInterface $statementCache,
         private ?Proxy\ProxyManager $proxyManager,
         private readonly ?CacheItemPoolInterface $secondLevelCache = null,
-        private readonly int $secondLevelCacheTtl = 3600,
+        private readonly int $secondLevelCacheTtl = CollectionCacheInterface::DEFAULT_TTL,
     ) {
     }
 
@@ -164,7 +165,7 @@ class EntityReadService implements CachedEntityResolverInterface {
     {
         foreach ($this->unitOfWorkRegistry->all() as $unitOfWork) {
             $entity = $unitOfWork->tryGetById($class, $id);
-            if ($entity) {
+            if ($entity !== null) {
                 return $entity;
             }
         }
@@ -178,6 +179,56 @@ class EntityReadService implements CachedEntityResolverInterface {
         $this->unitOfWorkRegistry->active()->registerManaged($entity, $cachedData);
 
         return $entity;
+    }
+
+    public function tryResolveMany(string $class, array $ids): ?array
+    {
+        $entities = [];
+        $unresolved = [];
+        foreach ($ids as $index => $id) {
+            $entity = $this->findInIdentityMaps($class, $id);
+            if ($entity === null) {
+                $unresolved[$index] = $id;
+
+                continue;
+            }
+
+            $entities[$index] = $entity;
+        }
+
+        if ($unresolved !== []) {
+            $cachedRows = $this->cacheCoordinator->getSecondLevelCacheDataMany($class, $unresolved);
+            if (in_array(null, $cachedRows, true)) {
+                return null;
+            }
+
+            foreach ($cachedRows as $index => $cachedData) {
+                $entity = $this->hydrator->hydrate($class, $cachedData);
+                $this->unitOfWorkRegistry->active()->registerManaged($entity, $cachedData);
+                $entities[$index] = $entity;
+            }
+        }
+
+        ksort($entities);
+
+        return array_values($entities);
+    }
+
+    public function cacheResolvedRows(string $class, array $idRowPairs): void
+    {
+        $this->cacheCoordinator->setSecondLevelCacheDataMany($class, $idRowPairs);
+    }
+
+    private function findInIdentityMaps(string $class, mixed $id): ?object
+    {
+        foreach ($this->unitOfWorkRegistry->all() as $unitOfWork) {
+            $entity = $unitOfWork->tryGetById($class, $id);
+            if ($entity !== null) {
+                return $entity;
+            }
+        }
+
+        return null;
     }
 
     /**

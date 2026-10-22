@@ -93,7 +93,7 @@ class QueryBuilder {
         ?CacheItemPoolInterface $statementCache = null,
         CollectionCacheInterface $collectionCache = new NullCollectionCache(),
         ?CachedEntityResolverInterface $cachedEntityResolver = null,
-        int $secondLevelCacheDefaultTtl = 3600,
+        int $secondLevelCacheDefaultTtl = CollectionCacheInterface::DEFAULT_TTL,
     ) {
         $this->connection = $connection;
         $this->hydrator = $hydrator;
@@ -111,7 +111,7 @@ class QueryBuilder {
             fn () => $this->createSubQueryBuilder(),
             $this->sqlCompiler
         );
-        $this->secondLevelCache = new QueryResultSecondLevelCache($collectionCache);
+        $this->secondLevelCache = new QueryResultSecondLevelCache($collectionCache, $connection->getCacheNamespace());
         $this->cachedEntityResolver = $cachedEntityResolver;
         $this->secondLevelCacheDefaultTtl = $secondLevelCacheDefaultTtl;
     }
@@ -976,9 +976,24 @@ class QueryBuilder {
     private function isCacheEligible(bool $usesDefaultHydration, ?string $targetClass): bool
     {
         return $this->secondLevelCache->isEnabled()
+            && !$this->lockForUpdate
             && $usesDefaultHydration
             && $targetClass !== null
-            && $this->cachedEntityResolver !== null;
+            && $this->cachedEntityResolver !== null
+            && $this->hasSingleColumnPrimaryKey($targetClass);
+    }
+
+    private function hasSingleColumnPrimaryKey(string $entityClass): bool
+    {
+        if ($this->metadataRegistry === null) {
+            return false;
+        }
+
+        try {
+            return count($this->metadataRegistry->getMetadata($entityClass)->getPrimaryKeyColumns()) === 1;
+        } catch (InvalidArgumentException) {
+            return false;
+        }
     }
 
     /**
@@ -1012,17 +1027,7 @@ class QueryBuilder {
      */
     private function resolveCachedIds(string $entityClass, array $ids): ?array
     {
-        $entities = [];
-        foreach ($ids as $id) {
-            $entity = $this->cachedEntityResolver->tryResolve($entityClass, $id);
-            if ($entity === null) {
-                return null;
-            }
-
-            $entities[] = $entity;
-        }
-
-        return $entities;
+        return $this->cachedEntityResolver->tryResolveMany($entityClass, $ids);
     }
 
     /**
@@ -1038,7 +1043,7 @@ class QueryBuilder {
         $metadata = $this->metadataRegistry->getMetadata($entityClass);
         $primaryKeyColumns = $metadata->getPrimaryKeyColumns();
 
-        if (empty($primaryKeyColumns)) {
+        if (count($primaryKeyColumns) !== 1) {
             return null;
         }
 
@@ -1050,7 +1055,6 @@ class QueryBuilder {
         $ids = [];
         foreach ($entities as $entity) {
             $property = ReflectionCache::getProperty($entity::class, $propertyName);
-            $property->setAccessible(true);
             $ids[] = $property->getValue($entity);
         }
 

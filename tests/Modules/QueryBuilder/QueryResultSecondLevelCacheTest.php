@@ -4,6 +4,8 @@ namespace Articulate\Tests\Modules\QueryBuilder;
 
 use Articulate\Modules\Cache\CollectionCacheInterface;
 use Articulate\Modules\QueryBuilder\QueryResultSecondLevelCache;
+use Articulate\Tests\Modules\QueryBuilder\Fixtures\QbCachePrivateFieldParam;
+use Articulate\Tests\Modules\QueryBuilder\Fixtures\QbCacheUnserializableParam;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -225,7 +227,7 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $sql = 'SELECT * FROM users WHERE id = ?';
         $params = [42];
 
-        $expected = 'cq_' . hash('sha256', $entityClass . '|' . $sql . '|' . json_encode($params));
+        $expected = 'cq_' . hash('sha256', serialize(['', $entityClass, $sql, $params]));
 
         $this->assertSame($expected, $cache->buildCacheKey($entityClass, $sql, $params));
     }
@@ -237,5 +239,77 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $key = $cache->buildCacheKey('App\\User', 'SELECT 1', []);
 
         $this->assertStringStartsWith('cq_', $key);
+    }
+
+    public function testBinaryParamsProduceDistinctKeys(): void
+    {
+        $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
+
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x01"]);
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x02"]);
+
+        $this->assertNotNull($keyA);
+        $this->assertNotNull($keyB);
+        $this->assertNotSame($keyA, $keyB);
+    }
+
+    public function testDistinctObjectParamsWithPrivateStateProduceDistinctKeys(): void
+    {
+        $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
+
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)]);
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(2)]);
+        $keyA2 = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)]);
+
+        $this->assertNotSame($keyA, $keyB);
+        $this->assertSame($keyA, $keyA2);
+    }
+
+    public function testObjectParamsAreKeyedByClassAndState(): void
+    {
+        $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
+
+        $keyA = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([1])]);
+        $keyB = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([2])]);
+
+        $this->assertNotSame($keyA, $keyB);
+    }
+
+    public function testParamTypesAreTagged(): void
+    {
+        $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
+
+        $this->assertNotSame(
+            $cache->buildCacheKey(null, 'SELECT 1', [1]),
+            $cache->buildCacheKey(null, 'SELECT 1', ['1']),
+        );
+        $this->assertNotSame(
+            $cache->buildCacheKey(null, 'SELECT 1', [[1, 2]]),
+            $cache->buildCacheKey(null, 'SELECT 1', [[1], 2]),
+        );
+    }
+
+    public function testUnserializableParamsYieldNoKey(): void
+    {
+        $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
+
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [new QbCacheUnserializableParam()]));
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [[new QbCacheUnserializableParam()]]));
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [fopen('php://memory', 'r')]));
+    }
+
+    public function testNullParamsAreAllowed(): void
+    {
+        $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
+
+        $this->assertNotNull($cache->buildCacheKey(null, 'SELECT 1', [null]));
+    }
+
+    public function testNamespaceIsPartOfTheKey(): void
+    {
+        $a = new QueryResultSecondLevelCache(new SpyCollectionCache(), 'ns-a');
+        $b = new QueryResultSecondLevelCache(new SpyCollectionCache(), 'ns-b');
+
+        $this->assertNotSame($a->buildCacheKey(null, 'SELECT 1', []), $b->buildCacheKey(null, 'SELECT 1', []));
     }
 }

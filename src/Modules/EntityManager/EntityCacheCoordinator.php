@@ -2,6 +2,7 @@
 
 namespace Articulate\Modules\EntityManager;
 
+use Articulate\Modules\Cache\CollectionCacheInterface;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Utils\ReflectionCache;
 use Psr\Cache\CacheItemPoolInterface;
@@ -13,11 +14,12 @@ class EntityCacheCoordinator {
         private readonly ?CacheItemPoolInterface $resultCache,
         private readonly EntityMetadataRegistry $metadataRegistry,
         ?CacheItemPoolInterface $secondLevelCache = null,
-        int $secondLevelCacheTtl = 3600,
+        int $secondLevelCacheTtl = CollectionCacheInterface::DEFAULT_TTL,
+        string $cacheNamespace = '',
     ) {
         $secondLevelCachePool = $secondLevelCache ?? $resultCache;
         if ($secondLevelCachePool !== null) {
-            $this->secondLevelCache = new SecondLevelCache($secondLevelCachePool, $secondLevelCacheTtl);
+            $this->secondLevelCache = new SecondLevelCache($secondLevelCachePool, $secondLevelCacheTtl, $cacheNamespace);
         }
     }
 
@@ -82,6 +84,23 @@ class EntityCacheCoordinator {
     public function setSecondLevelCacheData(string $class, mixed $id, array $data): void
     {
         $this->secondLevelCache?->set($class, $id, $data);
+    }
+
+    /**
+     * @param array<int, mixed> $ids
+     * @return array<int, array<string, mixed>|null>
+     */
+    public function getSecondLevelCacheDataMany(string $class, array $ids): array
+    {
+        return $this->secondLevelCache?->getMany($class, $ids) ?? array_fill_keys(array_keys($ids), null);
+    }
+
+    /**
+     * @param list<array{0: mixed, 1: array<string, mixed>}> $idRowPairs
+     */
+    public function setSecondLevelCacheDataMany(string $class, array $idRowPairs): void
+    {
+        $this->secondLevelCache?->setMany($class, $idRowPairs);
     }
 
     private function evictEntityFromSecondLevelCache(object $entity): void

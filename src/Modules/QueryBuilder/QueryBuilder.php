@@ -5,10 +5,14 @@ namespace Articulate\Modules\QueryBuilder;
 use Articulate\Connection;
 use Articulate\Exceptions\CursorPaginationException;
 use Articulate\Exceptions\TransactionRequiredException;
+use Articulate\Modules\Cache\CollectionCacheInterface;
+use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Modules\QueryBuilder\Filter\FilterCollection;
+use Articulate\Schema\CachedEntityResolverInterface;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Schema\HydratorInterface;
 use Articulate\Schema\ManagedEntityStoreInterface;
+use Articulate\Utils\ReflectionCache;
 use InvalidArgumentException;
 use Psr\Cache\CacheItemPoolInterface;
 
@@ -74,6 +78,12 @@ class QueryBuilder {
 
     private SqlStatementCache $statementCache;
 
+    private QueryResultSecondLevelCache $secondLevelCache;
+
+    private ?CachedEntityResolverInterface $cachedEntityResolver;
+
+    private int $secondLevelCacheDefaultTtl;
+
     public function __construct(
         Connection $connection,
         ?HydratorInterface $hydrator = null,
@@ -81,6 +91,9 @@ class QueryBuilder {
         ?CacheItemPoolInterface $resultCache = null,
         ?FilterCollection $filters = null,
         ?CacheItemPoolInterface $statementCache = null,
+        CollectionCacheInterface $collectionCache = new NullCollectionCache(),
+        ?CachedEntityResolverInterface $cachedEntityResolver = null,
+        int $secondLevelCacheDefaultTtl = CollectionCacheInterface::DEFAULT_TTL,
     ) {
         $this->connection = $connection;
         $this->hydrator = $hydrator;
@@ -98,6 +111,9 @@ class QueryBuilder {
             fn () => $this->createSubQueryBuilder(),
             $this->sqlCompiler
         );
+        $this->secondLevelCache = new QueryResultSecondLevelCache($collectionCache, $connection->getCacheNamespace());
+        $this->cachedEntityResolver = $cachedEntityResolver;
+        $this->secondLevelCacheDefaultTtl = $secondLevelCacheDefaultTtl;
     }
 
     public function createSubQueryBuilder(): QueryBuilder
@@ -350,6 +366,7 @@ class QueryBuilder {
         $this->entityClass = null;
         $this->disabledFilters = [];
         $this->resultCache->disable();
+        $this->secondLevelCache->disable();
         $this->dmlHandler->reset();
 
         return $this;
@@ -630,6 +647,25 @@ class QueryBuilder {
         $this->resultCache->setGeneration($generation);
     }
 
+    /**
+     * Opt this query into the second-level collection (query-region) cache:
+     * the first getResult() call caches the matched id-list, a repeated
+     * identical call resolves entirely from cache. Silent no-op when the
+     * query won't hydrate full entities via the default ObjectHydrator
+     * (aggregates, specific column selection, explicit custom hydrator) —
+     * same condition getResult() already uses for hydration bypass. See
+     * ADR-0002.
+     *
+     * Omitted $ttl falls back to the owning EntityManager's configured
+     * secondLevelCacheTtl.
+     */
+    public function cacheable(?int $ttl = null): self
+    {
+        $this->secondLevelCache->enable($ttl);
+
+        return $this;
+    }
+
     public function setHydrator(?HydratorInterface $hydrator): self
     {
         $this->hydrator = $hydrator;
@@ -871,16 +907,7 @@ class QueryBuilder {
 
     public function getResult(?string $entityClass = null): mixed
     {
-        $targetClass = $entityClass ?? $this->entityClass;
-
-        // Bypass entity hydration for aggregates/partial selects unless hydrator was explicitly set.
-        // ObjectHydrator (default) requires full entity rows; custom hydrators (e.g. ScalarHydrator)
-        // should always be invoked regardless of select shape.
-        if (!$this->hydratorExplicitlySet) {
-            if ($this->hasAggregateFunction() || $this->hasSpecificColumnSelection()) {
-                $targetClass = null;
-            }
-        }
+        [$targetClass, $usesDefaultHydration] = $this->resolveHydrationTarget($entityClass);
 
         if ($targetClass !== null && $this->hydrator === null) {
             throw new \LogicException('QueryBuilder requires a HydratorInterface to hydrate entity results.');
@@ -889,7 +916,24 @@ class QueryBuilder {
         $sql = $this->getSQL();
         $params = $this->getParameters();
 
-        return $this->resultExecutor->execute(
+        // cacheable() only ever applies when this call will hydrate full entities
+        // via the default ObjectHydrator — same condition as the bypass above. A
+        // non-null $cacheKey below is this method's single "is this call cache
+        // eligible" flag for the rest of the method.
+        $cacheKey = $this->isCacheEligible($usesDefaultHydration, $targetClass)
+            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params)
+            : null;
+
+        if ($cacheKey !== null) {
+            $cachedResult = $this->tryServeFromCache($targetClass, $cacheKey);
+            if ($cachedResult !== null) {
+                return $cachedResult;
+            }
+            // Miss, or resolution failed (e.g. an id no longer resolvable without a
+            // DB read) — fall through to a fresh query rather than serve a partial list.
+        }
+
+        $results = $this->resultExecutor->execute(
             $sql,
             $params,
             $targetClass,
@@ -899,8 +943,122 @@ class QueryBuilder {
             $this->offset,
             $this->orderBy,
             $this->groupBy,
-            $this->having
+            $this->having,
+            $cacheKey !== null ? $this->cachedEntityResolver : null,
         );
+
+        if ($cacheKey !== null) {
+            $this->maybeStoreIdsInCache($cacheKey, $results, $targetClass);
+        }
+
+        return $results;
+    }
+
+    /**
+     * Resolves the entity class getResult() should hydrate into, applying the
+     * same aggregate/specific-column-selection hydration bypass it has always
+     * used (ObjectHydrator requires full rows; custom hydrators always run).
+     *
+     * @return array{0: ?string, 1: bool} [$targetClass, $usesDefaultHydration]
+     */
+    private function resolveHydrationTarget(?string $entityClass): array
+    {
+        $targetClass = $entityClass ?? $this->entityClass;
+        $usesDefaultHydration = !$this->hydratorExplicitlySet;
+
+        if ($usesDefaultHydration && ($this->hasAggregateFunction() || $this->hasSpecificColumnSelection())) {
+            $targetClass = null;
+        }
+
+        return [$targetClass, $usesDefaultHydration];
+    }
+
+    private function isCacheEligible(bool $usesDefaultHydration, ?string $targetClass): bool
+    {
+        return $this->secondLevelCache->isEnabled()
+            && !$this->lockForUpdate
+            && $usesDefaultHydration
+            && $targetClass !== null
+            && $this->cachedEntityResolver !== null
+            && $this->hasSingleColumnPrimaryKey($targetClass);
+    }
+
+    private function hasSingleColumnPrimaryKey(string $entityClass): bool
+    {
+        if ($this->metadataRegistry === null) {
+            return false;
+        }
+
+        try {
+            return count($this->metadataRegistry->getMetadata($entityClass)->getPrimaryKeyColumns()) === 1;
+        } catch (InvalidArgumentException) {
+            return false;
+        }
+    }
+
+    /**
+     * @return list<object>|null null on cache miss or failed resolution
+     */
+    private function tryServeFromCache(string $targetClass, string $cacheKey): ?array
+    {
+        $cachedIds = $this->secondLevelCache->getCachedIds($cacheKey);
+        if ($cachedIds === null) {
+            return null;
+        }
+
+        return $this->resolveCachedIds($targetClass, $cachedIds);
+    }
+
+    private function maybeStoreIdsInCache(string $cacheKey, mixed $results, string $targetClass): void
+    {
+        if (!is_array($results)) {
+            return;
+        }
+
+        $ids = $this->extractIds($results, $targetClass);
+        if ($ids !== null) {
+            $this->secondLevelCache->storeIds($cacheKey, $ids, $this->secondLevelCacheDefaultTtl);
+        }
+    }
+
+    /**
+     * @param list<mixed> $ids
+     * @return list<object>|null null if any id cannot be resolved without a database read
+     */
+    private function resolveCachedIds(string $entityClass, array $ids): ?array
+    {
+        return $this->cachedEntityResolver->tryResolveMany($entityClass, $ids);
+    }
+
+    /**
+     * @param list<object> $entities
+     * @return list<mixed>|null
+     */
+    private function extractIds(array $entities, string $entityClass): ?array
+    {
+        if ($this->metadataRegistry === null) {
+            return null;
+        }
+
+        $metadata = $this->metadataRegistry->getMetadata($entityClass);
+        $primaryKeyColumns = $metadata->getPrimaryKeyColumns();
+
+        if (count($primaryKeyColumns) !== 1) {
+            return null;
+        }
+
+        $propertyName = $metadata->getPropertyNameForColumn($primaryKeyColumns[0]);
+        if ($propertyName === null) {
+            return null;
+        }
+
+        $ids = [];
+        foreach ($entities as $entity) {
+            $property = ReflectionCache::getProperty($entity::class, $propertyName);
+            $ids[] = $property->getValue($entity);
+        }
+
+        return $ids;
     }
 
     /**

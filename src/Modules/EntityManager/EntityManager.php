@@ -102,7 +102,7 @@ class EntityManager {
         $this->repositoryFactory = $repositoryFactory;
 
         $this->filters = new FilterCollection();
-        $this->cacheCoordinator = new EntityCacheCoordinator($resultCache, $this->metadataRegistry, $secondLevelCache, $secondLevelCacheTtl);
+        $this->cacheCoordinator = new EntityCacheCoordinator($resultCache, $this->metadataRegistry, $secondLevelCache, $secondLevelCacheTtl, $this->connection->getCacheNamespace());
         $this->dependencySorter = new EntityDependencySorter($this->metadataRegistry);
         $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->metadataRegistry, $this->dependencySorter);
         $this->readService = new EntityReadService(
@@ -115,6 +115,8 @@ class EntityManager {
             $resultCache,
             $statementCache,
             $this->proxyManager,
+            $secondLevelCache,
+            $secondLevelCacheTtl,
         );
         $this->refreshService = new EntityRefreshService(
             $this->connection,

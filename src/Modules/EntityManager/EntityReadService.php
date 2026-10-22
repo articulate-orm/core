@@ -3,15 +3,19 @@
 namespace Articulate\Modules\EntityManager;
 
 use Articulate\Connection;
+use Articulate\Modules\Cache\CollectionCache;
+use Articulate\Modules\Cache\CollectionCacheInterface;
+use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Modules\QueryBuilder\Filter\FilterCollection;
 use Articulate\Modules\QueryBuilder\QueryBuilder;
+use Articulate\Schema\CachedEntityResolverInterface;
 use Articulate\Schema\EntityMetadata;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Schema\HydratorInterface;
 use InvalidArgumentException;
 use Psr\Cache\CacheItemPoolInterface;
 
-class EntityReadService {
+class EntityReadService implements CachedEntityResolverInterface {
     public function __construct(
         private readonly Connection $connection,
         private HydratorInterface $hydrator,
@@ -22,6 +26,8 @@ class EntityReadService {
         private readonly ?CacheItemPoolInterface $resultCache,
         private readonly ?CacheItemPoolInterface $statementCache,
         private ?Proxy\ProxyManager $proxyManager,
+        private readonly ?CacheItemPoolInterface $secondLevelCache = null,
+        private readonly int $secondLevelCacheTtl = CollectionCacheInterface::DEFAULT_TTL,
     ) {
     }
 
@@ -123,6 +129,10 @@ class EntityReadService {
 
     public function createQueryBuilder(?string $entityClass = null): QueryBuilder
     {
+        $collectionCache = $this->secondLevelCache !== null
+            ? new CollectionCache($this->secondLevelCache)
+            : new NullCollectionCache();
+
         $qb = new QueryBuilder(
             $this->connection,
             $this->hydrator,
@@ -130,6 +140,9 @@ class EntityReadService {
             $this->resultCache,
             $this->filters,
             $this->statementCache,
+            $collectionCache,
+            $this,
+            $this->secondLevelCacheTtl,
         );
         $qb->setManagedEntityStore($this->unitOfWorkRegistry);
         $qb->setResultCacheGeneration($this->cacheCoordinator->readQueryCacheGeneration());
@@ -139,6 +152,91 @@ class EntityReadService {
         }
 
         return $qb;
+    }
+
+    /**
+     * Resolve a primary key to a managed entity purely from in-memory state
+     * (identity map) or the per-entity second-level cache — never the
+     * database. Used by QueryBuilder to rehydrate a `cacheable()` query's
+     * cached id-list. Returning null means the id could not be resolved this
+     * way; the caller (QueryBuilder) treats the entire cached list as a miss.
+     */
+    public function tryResolve(string $class, mixed $id): ?object
+    {
+        foreach ($this->unitOfWorkRegistry->all() as $unitOfWork) {
+            $entity = $unitOfWork->tryGetById($class, $id);
+            if ($entity !== null) {
+                return $entity;
+            }
+        }
+
+        $cachedData = $this->cacheCoordinator->getSecondLevelCacheData($class, $id);
+        if ($cachedData === null) {
+            return null;
+        }
+
+        $entity = $this->hydrator->hydrate($class, $cachedData);
+        $this->unitOfWorkRegistry->active()->registerManaged($entity, $cachedData);
+
+        return $entity;
+    }
+
+    public function tryResolveMany(string $class, array $ids): ?array
+    {
+        $entities = [];
+        $unresolved = [];
+        foreach ($ids as $index => $id) {
+            $entity = $this->findInIdentityMaps($class, $id);
+            if ($entity === null) {
+                $unresolved[$index] = $id;
+
+                continue;
+            }
+
+            $entities[$index] = $entity;
+        }
+
+        if ($unresolved !== []) {
+            $cachedRows = $this->cacheCoordinator->getSecondLevelCacheDataMany($class, $unresolved);
+            if (in_array(null, $cachedRows, true)) {
+                return null;
+            }
+
+            foreach ($cachedRows as $index => $cachedData) {
+                $entity = $this->hydrator->hydrate($class, $cachedData);
+                $this->unitOfWorkRegistry->active()->registerManaged($entity, $cachedData);
+                $entities[$index] = $entity;
+            }
+        }
+
+        ksort($entities);
+
+        return array_values($entities);
+    }
+
+    public function cacheResolvedRows(string $class, array $idRowPairs): void
+    {
+        $this->cacheCoordinator->setSecondLevelCacheDataMany($class, $idRowPairs);
+    }
+
+    private function findInIdentityMaps(string $class, mixed $id): ?object
+    {
+        foreach ($this->unitOfWorkRegistry->all() as $unitOfWork) {
+            $entity = $unitOfWork->tryGetById($class, $id);
+            if ($entity !== null) {
+                return $entity;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, mixed> $rawData
+     */
+    public function cacheResolvedRow(string $class, mixed $id, array $rawData): void
+    {
+        $this->cacheCoordinator->setSecondLevelCacheData($class, $id, $rawData);
     }
 
     public function createLazyReference(string $class, \Closure $loader): object

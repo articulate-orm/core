@@ -4,6 +4,7 @@ namespace Articulate\Tests\Modules\EntityManager;
 
 use Articulate\Attributes\Entity;
 use Articulate\Attributes\Indexes\PrimaryKey;
+use Articulate\Attributes\Lifecycle\PostRemove;
 use Articulate\Attributes\Lifecycle\PostUpdate;
 use Articulate\Attributes\Property;
 use Articulate\Attributes\SoftDeleteable;
@@ -129,6 +130,45 @@ class OptimisticLockCosmeticSoftDeleteAccount {
 
     #[Property(nullable: true)]
     public ?\DateTimeImmutable $deletedAt = null;
+}
+
+#[Entity(tableName: 'ol_soft_delete')]
+#[SoftDeleteable]
+#[VersionAware(['version'])]
+class OptimisticLockAwareSoftDeleteAccount {
+    #[PrimaryKey]
+    public ?int $id = null;
+
+    #[Property]
+    public string $name = '';
+
+    #[Property(nullable: true)]
+    public ?\DateTimeImmutable $deletedAt = null;
+}
+
+#[Entity(tableName: 'ol_soft_delete')]
+#[SoftDeleteable]
+class OptimisticLockPostRemoveSoftDeleteAccount {
+    #[PrimaryKey]
+    public ?int $id = null;
+
+    #[Property]
+    public string $name = '';
+
+    #[Property]
+    #[Version]
+    public int $version = 0;
+
+    #[Property(nullable: true)]
+    public ?\DateTimeImmutable $deletedAt = null;
+
+    public ?int $versionSeenInPostRemove = null;
+
+    #[PostRemove]
+    public function capturePostRemoveVersion(): void
+    {
+        $this->versionSeenInPostRemove = $this->version;
+    }
 }
 
 class OptimisticLockingTest extends DatabaseTestCase {
@@ -475,6 +515,52 @@ class OptimisticLockingTest extends DatabaseTestCase {
 
         $this->expectException(OptimisticLockException::class);
         $em->flush();
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testSoftDeleteThroughVersionAwareOnlySliceIssuesNoVersionSql(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+        $this->createSoftDeleteTable($connection, $databaseName);
+
+        $em = new EntityManager($connection);
+
+        $account = new OptimisticLockAwareSoftDeleteAccount();
+        $account->name = 'Grace';
+        $em->persist($account);
+        $em->flush();
+
+        // An out-of-band bump would make any leaked version check throw.
+        $connection->executeQuery('UPDATE ol_soft_delete SET version = 5 WHERE id = ?', [$account->id]);
+
+        $em->remove($account);
+        $em->flush();
+
+        $row = $connection->executeQuery('SELECT version, deleted_at FROM ol_soft_delete WHERE id = ?', [$account->id])->fetch();
+        $this->assertSame(5, (int) $row['version'], '#[VersionAware] slices bump nothing');
+        $this->assertNotNull($row['deleted_at']);
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testPostRemoveCallbackObservesBumpedVersionOnSoftDelete(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+        $this->createSoftDeleteTable($connection, $databaseName);
+
+        $em = new EntityManager($connection);
+
+        $account = new OptimisticLockPostRemoveSoftDeleteAccount();
+        $account->name = 'Heidi';
+        $em->persist($account);
+        $em->flush();
+
+        $em->remove($account);
+        $em->flush();
+
+        $this->assertSame(1, $account->versionSeenInPostRemove);
+        $this->assertSame(1, $account->version);
     }
 
     #[DataProvider('databaseProvider')]

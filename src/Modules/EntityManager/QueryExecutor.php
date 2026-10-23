@@ -10,7 +10,6 @@ use Articulate\Attributes\Relations\MorphTypeRegistry;
 use Articulate\Collection\MappingCollection;
 use Articulate\Connection;
 use Articulate\Exceptions\ManagedVersionColumnException;
-use Articulate\Exceptions\OptimisticLockException;
 use Articulate\Modules\Generators\GeneratorRegistry;
 use Articulate\Schema\EntityMetadata;
 use Articulate\Utils\ReflectionCache;
@@ -34,10 +33,13 @@ class QueryExecutor {
     /** @var EntityMetadata[] */
     private array $entityMetadataCache = [];
 
+    private VersionedRowWrite $versionedRowWrite;
+
     public function __construct(
         private Connection $connection,
         private GeneratorRegistry $generatorRegistry
     ) {
+        $this->versionedRowWrite = new VersionedRowWrite($connection);
     }
 
     private function getReflectionEntity(string $entityClass): ReflectionEntity
@@ -166,16 +168,15 @@ class QueryExecutor {
      *
      * @param object $entity The entity to update
      * @param array $changes The changed properties (fieldName => newValue)
-     * @return DeferredVersionBump|null In-memory #[Version] reconciliation for the caller to apply/revert; see EntityManager::flush().
+     * @return VersionedRowWriteHandle|null null when nothing is written; see VersionedRowWrite
      */
-    public function executeUpdate(object $entity, array $changes): ?DeferredVersionBump
+    public function executeUpdate(object $entity, array $changes): ?VersionedRowWriteHandle
     {
         if (empty($changes)) {
             return null;
         }
 
         $reflectionEntity = $this->getReflectionEntity($entity::class);
-        $tableName = $reflectionEntity->getTableName();
         $metadata = $this->entityMetadataCache[$entity::class] ??= new EntityMetadata($entity::class);
 
         // Prepare SET clause from changes
@@ -221,65 +222,32 @@ class QueryExecutor {
         // Handle ManyToOne and owning OneToOne relationships
         $this->addManyToOneChanges($entity, $setParts, $values);
 
-        // Optimistic-lock bump: server-side increment, no bound parameter needed.
-        foreach ($versionColumns as $versionColumn) {
-            $setParts[] = "{$versionColumn} = {$versionColumn} + 1";
-        }
-
-        // Prepare WHERE clause - try primary key first, then fall back to 'id' property
         [$whereClause, $whereValues] = $this->buildWhereClause($entity);
 
-        // Optimistic-lock check: the slice's own #[Version] column, bound to the
-        // entity's currently-tracked value (kept in sync with the DB by the
-        // deferred reconciliation returned below and by UnitOfWork::clearChanges() refreshing the snapshot).
-        $checkedVersionColumns = $versionColumns;
-        $originalVersionValues = [];
-        foreach ($checkedVersionColumns as $checkedColumn) {
-            $originalVersionValues[$checkedColumn] = $this->getVersionColumnValue($metadata, $entity, $checkedColumn);
-            $whereClause .= " AND {$checkedColumn} = ?";
-            $whereValues[] = $originalVersionValues[$checkedColumn];
-        }
-
-        // Combine all parameters
-        $allValues = array_merge($values, $whereValues);
-
-        // Generate UPDATE SQL
-        $sql = sprintf(
-            'UPDATE %s SET %s WHERE %s',
-            $tableName,
-            implode(', ', $setParts),
-            $whereClause
-        );
-
-        $statement = $this->connection->executeQuery($sql, $allValues);
-
-        $this->assertVersionCheckSucceeded($statement, $tableName, $checkedVersionColumns);
-
-        return $this->deferredVersionReconciliation($metadata, $entity, $originalVersionValues);
+        return $this->versionedRowWrite->execute($metadata, $entity, $setParts, $values, $whereClause, $whereValues);
     }
 
     /**
-     * Builds the in-memory reconciliation for an entity's checked #[Version] columns.
-     *
-     * The DB already incremented them server-side; the returned bump walks the tracked
-     * original values forward by one so the entity matches its row without a re-SELECT.
-     * The caller decides when to apply it (EntityManager::flush() does so before
-     * post-update callbacks) and reverts it if the flush never commits.
-     *
-     * @param array<string, mixed> $originalCheckedValues column name => value bound to the UPDATE's WHERE
-     * @return DeferredVersionBump|null null when the entity has no checked #[Version] column
+     * Metadata is passed in (registry-resolved) so the PSR-6 metadata cache and table index are honored.
      */
-    public function deferredVersionReconciliation(EntityMetadata $metadata, object $entity, array $originalCheckedValues): ?DeferredVersionBump
+    public function executeSoftDelete(object $entity, EntityMetadata $metadata): ?VersionedRowWriteHandle
     {
-        if ($originalCheckedValues === []) {
+        $softDeleteColumn = $metadata->getSoftDeleteColumn();
+
+        if ($softDeleteColumn === null) {
             return null;
         }
 
-        return new DeferredVersionBump(function (int $delta) use ($metadata, $entity, $originalCheckedValues): void {
-            foreach ($originalCheckedValues as $column => $original) {
-                $this->setVersionColumnValue($metadata, $entity, $column, $original + $delta);
-            }
-        });
+        $where = $this->buildEntityWhereClause($entity);
+
+        return $this->versionedRowWrite->execute(
+            $metadata,
+            $entity,
+            ["{$softDeleteColumn} = ?"],
+            [(new \DateTimeImmutable())->format('Y-m-d H:i:s')],
+            $where['clause'],
+            $where['values'],
+        );
     }
 
     /**
@@ -287,18 +255,14 @@ class QueryExecutor {
      *
      * @param array<string, mixed> $columnChanges
      * @param array<int, mixed> $whereValues
-     * @param string[] $versionBumpColumns Columns to bump (SET col = col + 1), never checked
-     * @param array<string, mixed> $versionCheckColumns Columns to check (WHERE col = ?), keyed by column name → expected original value
      */
     public function executeUpdateByTable(
         string $tableName,
         array $columnChanges,
         string $whereClause,
         array $whereValues,
-        array $versionBumpColumns = [],
-        array $versionCheckColumns = [],
     ): void {
-        if (empty($columnChanges) && empty($versionBumpColumns)) {
+        if (empty($columnChanges)) {
             return;
         }
 
@@ -309,15 +273,6 @@ class QueryExecutor {
             $values[] = $value;
         }
 
-        foreach ($versionBumpColumns as $versionColumn) {
-            $setParts[] = "{$versionColumn} = {$versionColumn} + 1";
-        }
-
-        foreach ($versionCheckColumns as $checkedColumn => $originalValue) {
-            $whereClause .= " AND {$checkedColumn} = ?";
-            $whereValues[] = $originalValue;
-        }
-
         $allValues = array_merge($values, $whereValues);
 
         $sql = sprintf(
@@ -327,40 +282,7 @@ class QueryExecutor {
             $whereClause
         );
 
-        $statement = $this->connection->executeQuery($sql, $allValues);
-
-        $this->assertVersionCheckSucceeded($statement, $tableName, array_keys($versionCheckColumns));
-    }
-
-    /**
-     * @param string[] $checkedVersionColumns
-     */
-    private function assertVersionCheckSucceeded(\PDOStatement $statement, string $tableName, array $checkedVersionColumns): void
-    {
-        if (empty($checkedVersionColumns) || $statement->rowCount() > 0) {
-            return;
-        }
-
-        throw new OptimisticLockException(sprintf(
-            'Optimistic lock failed updating "%s": row not found or version mismatch on %s.',
-            $tableName,
-            implode(', ', $checkedVersionColumns)
-        ));
-    }
-
-    public function getVersionColumnValue(EntityMetadata $metadata, object $entity, string $columnName): mixed
-    {
-        $propertyName = $metadata->getPropertyNameForColumn($columnName);
-        $property = $propertyName !== null ? $metadata->getProperty($propertyName) : null;
-
-        return $property?->getValue($entity);
-    }
-
-    private function setVersionColumnValue(EntityMetadata $metadata, object $entity, string $columnName, mixed $value): void
-    {
-        $propertyName = $metadata->getPropertyNameForColumn($columnName);
-        $property = $propertyName !== null ? $metadata->getProperty($propertyName) : null;
-        $property?->setValue($entity, $value);
+        $this->connection->executeQuery($sql, $allValues);
     }
 
     /**

@@ -10,11 +10,11 @@ use PhpBench\Attributes as Bench;
 
 #[Bench\BeforeMethods('setUp')]
 #[Bench\AfterMethods('tearDown')]
-#[Bench\Iterations(5)]
-#[Bench\Revs(3)]
-#[Bench\Warmup(1)]
+#[Bench\Iterations(3)]
+#[Bench\Revs(1)]
+#[Bench\Warmup(0)]
 class EntityManagerBench {
-    private const ROWS = 2000;
+    private const ROWS = 10000;
 
     private BenchDatabase $database;
 

@@ -14,12 +14,12 @@ use PHPUnit\Framework\TestCase;
  * carry generous headroom so they only trip on real regressions (leaks, N+1, copies).
  */
 class PerformanceBudgetTest extends TestCase {
-    private const ROWS = 2000;
+    private const ROWS = 10000;
 
-    /** Measured ~780 B/entity; ceiling leaves ~2.5x headroom. */
+    /** Measured ~820 B/entity at 10k rows; ceiling leaves ~2.4x headroom. */
     private const MAX_BYTES_PER_HYDRATED_ENTITY = 2000;
 
-    /** Measured ~400 B retained after three load/clear rounds. */
+    /** Measured ~0 B retained after three load/clear rounds. */
     private const MAX_RETAINED_AFTER_CLEAR_BYTES = 20000;
 
     private BenchDatabase $database;

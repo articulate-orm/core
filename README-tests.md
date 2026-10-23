@@ -213,3 +213,15 @@ See `ExampleMultiDatabaseTest.php` for comprehensive examples of different testi
 - **Table conflicts**: Use `getTableName()` to generate unique table names
 - **SQL syntax errors**: Ensure database-specific SQL is correct
 - **Test isolation**: Each test runs in a transaction that's rolled back automatically
+
+## Performance
+
+- `composer test:performance` runs `tests/Performance` (MySQL only, excluded from `composer test`). It asserts exact SQL
+  statement counts (one `findAll` query, one UPDATE per dirty entity, sibling slices merged into one UPDATE, no queries
+  on an empty flush) and memory ceilings (bytes per hydrated entity, bytes retained after `clear()`). The ceilings carry
+  ~2.5x headroom over measured values; if one trips, find the regression before raising it.
+- `composer bench` runs the PHPBench suite in `benchmarks/` (time and peak memory). `composer bench:baseline` stores a
+  `main` reference and `composer bench:compare` compares the working tree against it.
+- The `Benchmarks` workflow runs the PR's benchmarks against both the base and the PR and prints the comparison in the job
+  summary. It is informational (`continue-on-error`): shared runners are too noisy for timing gates.
+

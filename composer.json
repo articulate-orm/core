@@ -10,7 +10,8 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Articulate\\Tests\\": "tests/"
+            "Articulate\\Tests\\": "tests/",
+            "Articulate\\Benchmarks\\": "benchmarks/"
         }
     },
     "authors": [
@@ -29,7 +30,8 @@
         "infection/infection": "dev-master",
         "deptrac/deptrac": "^4.6",
         "phpmd/phpmd": "^2.15 || ^3.0",
-        "phpstan/phpstan": "^2.0"
+        "phpstan/phpstan": "^2.0",
+        "phpbench/phpbench": "^1.7"
     },
     "require": {
         "php": ">=8.4",
@@ -53,6 +55,10 @@
         "architecture:check:verbose": "vendor/bin/deptrac analyse --config-file=deptrac.yaml --formatter=graphviz-image --output=architecture.svg",
         "complexity:check": "php vendor/bin/phpmd src text phpmd.xml",
         "static:check": "phpstan analyse --memory-limit=1G",
+        "bench": "phpbench run benchmarks --report=aggregate --retry-threshold=5",
+        "bench:baseline": "phpbench run benchmarks --tag=main --store --progress=none",
+        "bench:compare": "phpbench run benchmarks --ref=main --report=aggregate --progress=none",
+        "test:performance": "phpunit --testsuite=Performance",
         "qa": [
             "@cs:check",
             "@architecture:check",

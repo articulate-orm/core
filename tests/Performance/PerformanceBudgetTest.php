@@ -108,6 +108,25 @@ class PerformanceBudgetTest extends TestCase {
     }
 
     #[DataProvider('rowCounts')]
+    public function testSiblingSlicesOnEveryRowMergeIntoOneUpdatePerRow(int $rows): void
+    {
+        $this->seed($rows);
+        $logins = $this->entityManager->findAll(BenchAccountLogin::class);
+        $profiles = $this->entityManager->findAll(BenchAccountProfile::class);
+        $this->database->queries->reset();
+
+        foreach ($logins as $login) {
+            $login->loginCount++;
+        }
+        foreach ($profiles as $profile) {
+            $profile->bio = 'merged';
+        }
+        $this->entityManager->flush();
+
+        $this->assertSame($rows, $this->database->queries->byVerb['UPDATE'] ?? 0);
+    }
+
+    #[DataProvider('rowCounts')]
     public function testHydrationMemoryStaysWithinBudget(int $rows): void
     {
         $this->seed($rows);

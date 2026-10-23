@@ -8,7 +8,6 @@ use Articulate\Benchmarks\Fixtures\BenchAccountProfile;
 use Articulate\Modules\EntityManager\EntityManager;
 use PhpBench\Attributes as Bench;
 
-#[Bench\BeforeMethods('setUp')]
 #[Bench\ParamProviders('provideRowCounts')]
 #[Bench\AfterMethods('tearDown')]
 #[Bench\Iterations(3)]
@@ -46,21 +45,61 @@ class EntityManagerBench {
         $this->database->dropAccounts();
     }
 
+    #[Bench\BeforeMethods('setUp')]
     public function benchHydrateAll(): void
     {
         $this->entityManager->findAll(BenchAccount::class);
         $this->entityManager->clear();
     }
 
-    public function benchFlushUpdates(): void
+    /**
+     * @param array{rows: int} $params
+     */
+    public function loadAccountsAndDirty(array $params): void
     {
-        $accounts = $this->entityManager->findAll(BenchAccount::class);
-        foreach ($accounts as $account) {
+        $this->setUp($params);
+        foreach ($this->entityManager->findAll(BenchAccount::class) as $account) {
             ++$account->loginCount;
+            $account->bio = 'updated';
         }
-        $this->entityManager->flushAndClear();
     }
 
+    /**
+     * @param array{rows: int} $params
+     */
+    public function loadSlicesAndDirty(array $params): void
+    {
+        $this->setUp($params);
+        foreach ($this->entityManager->findAll(BenchAccountLogin::class) as $login) {
+            ++$login->loginCount;
+        }
+        foreach ($this->entityManager->findAll(BenchAccountProfile::class) as $profile) {
+            $profile->bio = 'updated';
+        }
+    }
+
+    /**
+     * Times flush only: hydration and dirtying happen in the before-method.
+     * One entity, two changed columns, one UPDATE per row.
+     */
+    #[Bench\BeforeMethods('loadAccountsAndDirty')]
+    public function benchFlushUpdates(): void
+    {
+        $this->entityManager->flush();
+    }
+
+    /**
+     * Same row count and same two changed columns as benchFlushUpdates, but spread over two
+     * sibling slices of each row. Both end up as one UPDATE per row, so the time difference
+     * to benchFlushUpdates is the cost of detecting and merging siblings.
+     */
+    #[Bench\BeforeMethods('loadSlicesAndDirty')]
+    public function benchFlushMergedSlices(): void
+    {
+        $this->entityManager->flush();
+    }
+
+    #[Bench\BeforeMethods('setUp')]
     public function benchFlushInserts(): void
     {
         for ($i = 0; $i < $this->rows; ++$i) {
@@ -69,17 +108,6 @@ class EntityManagerBench {
             $account->displayName = "New {$i}";
             $account->bio = 'bio';
             $this->entityManager->persist($account);
-        }
-        $this->entityManager->flushAndClear();
-    }
-
-    public function benchMergeSiblingSlices(): void
-    {
-        for ($id = 1; $id <= 500; ++$id) {
-            $login = $this->entityManager->find(BenchAccountLogin::class, $id);
-            $profile = $this->entityManager->find(BenchAccountProfile::class, $id);
-            ++$login->loginCount;
-            $profile->bio = "updated {$id}";
         }
         $this->entityManager->flushAndClear();
     }

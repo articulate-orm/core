@@ -7,16 +7,16 @@ use Articulate\Benchmarks\Fixtures\BenchAccount;
 use Articulate\Benchmarks\Fixtures\BenchAccountLogin;
 use Articulate\Benchmarks\Fixtures\BenchAccountProfile;
 use Articulate\Modules\EntityManager\EntityManager;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Deterministic performance guards: SQL statement counts are exact, memory ceilings
  * carry generous headroom so they only trip on real regressions (leaks, N+1, copies).
+ * Every budget runs at 2k and 10k rows, so a cost that stops scaling linearly shows up.
  */
 class PerformanceBudgetTest extends TestCase {
-    private const ROWS = 10000;
-
-    /** Measured ~820 B/entity at 10k rows; ceiling leaves ~2.4x headroom. */
+    /** Measured ~820 B/entity; ceiling leaves ~2.4x headroom. */
     private const MAX_BYTES_PER_HYDRATED_ENTITY = 2000;
 
     /** Measured ~0 B retained after three load/clear rounds. */
@@ -25,6 +25,14 @@ class PerformanceBudgetTest extends TestCase {
     private BenchDatabase $database;
 
     private EntityManager $entityManager;
+
+    /**
+     * @return array<string, array{int}>
+     */
+    public static function rowCounts(): array
+    {
+        return ['2k rows' => [2000], '10k rows' => [10000]];
+    }
 
     protected function setUp(): void
     {
@@ -35,9 +43,6 @@ class PerformanceBudgetTest extends TestCase {
         } catch (\RuntimeException $e) {
             $this->markTestSkipped($e->getMessage());
         }
-
-        $this->database->createAccounts(self::ROWS);
-        $this->entityManager = new EntityManager($this->database->connection);
     }
 
     protected function tearDown(): void
@@ -49,16 +54,21 @@ class PerformanceBudgetTest extends TestCase {
         parent::tearDown();
     }
 
-    public function testFindAllIsOneQuery(): void
+    #[DataProvider('rowCounts')]
+    public function testFindAllIsOneQuery(int $rows): void
     {
+        $this->seed($rows);
+
         $accounts = $this->entityManager->findAll(BenchAccount::class);
 
-        $this->assertCount(self::ROWS, $accounts);
+        $this->assertCount($rows, $accounts);
         $this->assertSame(1, $this->database->queries->total);
     }
 
-    public function testFlushingNoChangesIssuesNoQueries(): void
+    #[DataProvider('rowCounts')]
+    public function testFlushingNoChangesIssuesNoQueries(int $rows): void
     {
+        $this->seed($rows);
         $this->entityManager->findAll(BenchAccount::class);
         $this->database->queries->reset();
 
@@ -67,8 +77,10 @@ class PerformanceBudgetTest extends TestCase {
         $this->assertSame(0, $this->database->queries->total);
     }
 
-    public function testFlushIssuesOneUpdatePerDirtyEntity(): void
+    #[DataProvider('rowCounts')]
+    public function testFlushIssuesOneUpdatePerDirtyEntity(int $rows): void
     {
+        $this->seed($rows);
         $accounts = $this->entityManager->findAll(BenchAccount::class);
         $this->database->queries->reset();
 
@@ -77,11 +89,13 @@ class PerformanceBudgetTest extends TestCase {
         }
         $this->entityManager->flush();
 
-        $this->assertSame(self::ROWS, $this->database->queries->byVerb['UPDATE'] ?? 0);
+        $this->assertSame($rows, $this->database->queries->byVerb['UPDATE'] ?? 0);
     }
 
-    public function testSiblingSlicesOnOneRowMergeIntoOneUpdate(): void
+    #[DataProvider('rowCounts')]
+    public function testSiblingSlicesOnOneRowMergeIntoOneUpdate(int $rows): void
     {
+        $this->seed($rows);
         $login = $this->entityManager->find(BenchAccountLogin::class, 1);
         $profile = $this->entityManager->find(BenchAccountProfile::class, 1);
         $this->database->queries->reset();
@@ -93,21 +107,26 @@ class PerformanceBudgetTest extends TestCase {
         $this->assertSame(1, $this->database->queries->byVerb['UPDATE'] ?? 0);
     }
 
-    public function testHydrationMemoryStaysWithinBudget(): void
+    #[DataProvider('rowCounts')]
+    public function testHydrationMemoryStaysWithinBudget(int $rows): void
     {
+        $this->seed($rows);
         $this->entityManager->findAll(BenchAccount::class);
         $this->entityManager->clear();
         gc_collect_cycles();
 
         $before = memory_get_usage();
-        $this->entityManager->findAll(BenchAccount::class);
+        $accounts = $this->entityManager->findAll(BenchAccount::class);
         $held = memory_get_usage() - $before;
 
-        $this->assertLessThan(self::MAX_BYTES_PER_HYDRATED_ENTITY * self::ROWS, $held);
+        $this->assertCount($rows, $accounts);
+        $this->assertLessThan(self::MAX_BYTES_PER_HYDRATED_ENTITY * $rows, $held);
     }
 
-    public function testClearReleasesHydratedEntities(): void
+    #[DataProvider('rowCounts')]
+    public function testClearReleasesHydratedEntities(int $rows): void
     {
+        $this->seed($rows);
         $this->entityManager->findAll(BenchAccount::class);
         $this->entityManager->clear();
         gc_collect_cycles();
@@ -120,5 +139,11 @@ class PerformanceBudgetTest extends TestCase {
         }
 
         $this->assertLessThan(self::MAX_RETAINED_AFTER_CLEAR_BYTES, memory_get_usage() - $baseline);
+    }
+
+    private function seed(int $rows): void
+    {
+        $this->database->createAccounts($rows);
+        $this->entityManager = new EntityManager($this->database->connection);
     }
 }

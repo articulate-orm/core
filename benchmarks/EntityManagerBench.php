@@ -9,21 +9,35 @@ use Articulate\Modules\EntityManager\EntityManager;
 use PhpBench\Attributes as Bench;
 
 #[Bench\BeforeMethods('setUp')]
+#[Bench\ParamProviders('provideRowCounts')]
 #[Bench\AfterMethods('tearDown')]
 #[Bench\Iterations(3)]
 #[Bench\Revs(1)]
 #[Bench\Warmup(0)]
 class EntityManagerBench {
-    private const ROWS = 10000;
+    private int $rows = 0;
 
     private BenchDatabase $database;
 
     private EntityManager $entityManager;
 
-    public function setUp(): void
+    /**
+     * @return iterable<string, array{rows: int}>
+     */
+    public function provideRowCounts(): iterable
     {
+        yield '2k' => ['rows' => 2000];
+        yield '10k' => ['rows' => 10000];
+    }
+
+    /**
+     * @param array{rows: int} $params
+     */
+    public function setUp(array $params): void
+    {
+        $this->rows = $params['rows'];
         $this->database = new BenchDatabase();
-        $this->database->createAccounts(self::ROWS);
+        $this->database->createAccounts($this->rows);
         $this->entityManager = new EntityManager($this->database->connection);
     }
 
@@ -49,7 +63,7 @@ class EntityManagerBench {
 
     public function benchFlushInserts(): void
     {
-        for ($i = 0; $i < self::ROWS; ++$i) {
+        for ($i = 0; $i < $this->rows; ++$i) {
             $account = new BenchAccount();
             $account->email = "new{$i}@example.com";
             $account->displayName = "New {$i}";

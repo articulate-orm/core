@@ -3,6 +3,8 @@
 namespace Articulate\Modules\EntityManager;
 
 use Articulate\Connection;
+use Articulate\Modules\Cache\CollectionCache;
+use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Modules\Generators\GeneratorRegistry;
 use Articulate\Modules\QueryBuilder\Filter\FilterCollection;
 use Articulate\Modules\QueryBuilder\QueryBuilder;
@@ -102,7 +104,10 @@ class EntityManager {
         $this->repositoryFactory = $repositoryFactory;
 
         $this->filters = new FilterCollection();
-        $this->cacheCoordinator = new EntityCacheCoordinator($resultCache, $this->metadataRegistry, $secondLevelCache, $secondLevelCacheTtl);
+        $collectionCache = $secondLevelCache !== null
+            ? new CollectionCache($secondLevelCache)
+            : new NullCollectionCache();
+        $this->cacheCoordinator = new EntityCacheCoordinator($resultCache, $this->metadataRegistry, $secondLevelCache, $secondLevelCacheTtl, $collectionCache);
         $this->dependencySorter = new EntityDependencySorter($this->metadataRegistry);
         $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->metadataRegistry, $this->dependencySorter);
         $this->readService = new EntityReadService(
@@ -115,6 +120,8 @@ class EntityManager {
             $resultCache,
             $statementCache,
             $this->proxyManager,
+            $secondLevelCache,
+            $secondLevelCacheTtl,
         );
         $this->refreshService = new EntityRefreshService(
             $this->connection,

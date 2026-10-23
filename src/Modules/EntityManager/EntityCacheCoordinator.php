@@ -2,6 +2,8 @@
 
 namespace Articulate\Modules\EntityManager;
 
+use Articulate\Modules\Cache\CollectionCacheInterface;
+use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Utils\ReflectionCache;
 use Psr\Cache\CacheItemPoolInterface;
@@ -14,6 +16,7 @@ class EntityCacheCoordinator {
         private readonly EntityMetadataRegistry $metadataRegistry,
         ?CacheItemPoolInterface $secondLevelCache = null,
         int $secondLevelCacheTtl = 3600,
+        private readonly CollectionCacheInterface $collectionCache = new NullCollectionCache(),
     ) {
         $secondLevelCachePool = $secondLevelCache ?? $resultCache;
         if ($secondLevelCachePool !== null) {
@@ -55,10 +58,6 @@ class EntityCacheCoordinator {
      */
     public function invalidateSecondLevelCache(array $changes): void
     {
-        if ($this->secondLevelCache === null) {
-            return;
-        }
-
         foreach ($changes['updates'] as $update) {
             if (isset($update['entity'])) {
                 $this->evictEntityFromSecondLevelCache($update['entity']);
@@ -100,13 +99,38 @@ class EntityCacheCoordinator {
 
         if (empty($siblingClasses)) {
             $this->secondLevelCache?->evict($entityClass, $id);
+        } else {
+            foreach ($siblingClasses as $class) {
+                $this->secondLevelCache?->evict($class, $id);
+            }
+        }
 
+        $this->evictReverseIndexedQueryCacheEntries($tableName, $id);
+    }
+
+    /**
+     * Exact invalidation (ADR-0002): resolve the table + id for the
+     * changed row, look up the reverse index for that pair, and evict
+     * exactly the query-cache entries it names — never a blunt "evict
+     * everything for this table" sweep. Table-scoped so sibling classes
+     * sharing a table/PK resolve to the same entry, and unrelated tables
+     * with a coincidentally-matching raw id never collide. Normalization
+     * of $id happens inside the CollectionCacheInterface implementation
+     * (same as SecondLevelCache), so the raw id is passed through as-is.
+     */
+    private function evictReverseIndexedQueryCacheEntries(string $tableName, mixed $id): void
+    {
+        $cacheKeys = $this->collectionCache->getReverseIndexCacheKeys($tableName, $id);
+
+        if ($cacheKeys === null) {
             return;
         }
 
-        foreach ($siblingClasses as $class) {
-            $this->secondLevelCache?->evict($class, $id);
+        foreach ($cacheKeys as $cacheKey) {
+            $this->collectionCache->evictIdList($cacheKey);
         }
+
+        $this->collectionCache->evictReverseIndex($tableName, $id);
     }
 
     private function extractEntityIdForCache(object $entity, string $entityClass): mixed

@@ -462,6 +462,38 @@ class SecondLevelCacheTest extends DatabaseTestCase {
         $cache->generateKey(L2CacheUser::class, new \stdClass());
     }
 
+    /**
+     * Pins the exact concatenation order (class . ':' . normalizedId). A
+     * relative-difference assertion (e.g. testIntAndStringIdsDoNotCollide)
+     * can't catch a mutant that reorders the concatenation — both sides of
+     * a differing-input comparison still differ under that mutant. Only an
+     * independently-computed golden value catches it.
+     */
+    public function testGenerateKeyMatchesTheDocumentedFormatExactly(): void
+    {
+        $cache = new SecondLevelCache(new L2ArrayCache());
+
+        $expected = hash('sha256', L2CacheUser::class . ':i:42');
+
+        $this->assertSame($expected, $cache->generateKey(L2CacheUser::class, 42));
+    }
+
+    /**
+     * Pins the exact per-pair concatenation order inside the composite-key
+     * normalizer (key . '=' . normalize(value)). testCompositeKeyOrderIsStable
+     * only proves two differently-keyed calls still differ under a swap —
+     * it can't catch a mutant that reorders key/value within one pair,
+     * since re-sorting by key still differs for differing inputs.
+     */
+    public function testCompositeKeyPairFormatMatchesTheDocumentedShapeExactly(): void
+    {
+        $cache = new SecondLevelCache(new L2ArrayCache());
+
+        $expected = hash('sha256', L2CacheUser::class . ':a:[id=i:7,tenant=i:4]');
+
+        $this->assertSame($expected, $cache->generateKey(L2CacheUser::class, ['tenant' => 4, 'id' => 7]));
+    }
+
     // -------------------------------------------------------------------------
 
     private function createUserTable(Connection $connection, string $databaseName): void

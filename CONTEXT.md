@@ -34,3 +34,10 @@ see ADRs under `docs-site/src/content/docs/reference/` for the "why" behind spec
   standard ORMs. Sibling slices sharing a table/PK resolve to the same cache identity in both the
   entity cache and the collection cache's reverse index — no separate handling needed for this
   case in either cache.
+
+## Flush
+
+- **Entity update**: One slice's dirty properties for one entity, written by that slice's own
+  UPDATE. The only kind of update that can carry an optimistic-lock version check.
+- **Merged update**: A single UPDATE combining the dirty columns of several sibling slices on
+  the same row. Never versioned — a slice with a `#[Version]` column is never merged.

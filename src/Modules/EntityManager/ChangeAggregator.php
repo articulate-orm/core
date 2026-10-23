@@ -2,6 +2,7 @@
 
 namespace Articulate\Modules\EntityManager;
 
+use Articulate\Exceptions\UpdateConflictException;
 use Articulate\Schema\EntityMetadataRegistry;
 use Psr\Log\LoggerInterface;
 
@@ -27,7 +28,7 @@ class ChangeAggregator {
      * Aggregates changes from multiple UnitOfWorks into an optimized execution plan.
      *
      * @param UnitOfWork[] $unitOfWorks
-     * @return array{inserts: object[], updates: array{entity: object, changes: array}[], deletes: object[], softDeletes: object[]}
+     * @return array{inserts: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]}
      */
     public function aggregateChanges(array $unitOfWorks): array
     {
@@ -41,10 +42,10 @@ class ChangeAggregator {
 
         return [
             'inserts' => $this->optimizeInserts(),
-            'updates' => $this->updateConflictResolutionStrategy->resolve(
-                $this->optimizeUpdates(),
-                $this->metadataRegistry,
-            ),
+            'updates' => array_values(array_map(
+                $this->toFlushUpdate(...),
+                $this->updateConflictResolutionStrategy->resolve($this->optimizeUpdates(), $this->metadataRegistry),
+            )),
             'deletes' => $deletes,
             'softDeletes' => $this->optimizeSoftDeletes(),
         ];
@@ -53,6 +54,42 @@ class ChangeAggregator {
     public function setUpdateConflictResolutionStrategy(UpdateConflictResolutionStrategy $updateConflictResolutionStrategy): void
     {
         $this->updateConflictResolutionStrategy = $updateConflictResolutionStrategy;
+    }
+
+    private function toFlushUpdate(mixed $update): EntityUpdate|MergedUpdate
+    {
+        if (
+            is_array($update)
+            && is_string($update['table'] ?? null)
+            && (!isset($update['entity']) || is_object($update['entity']))
+            && is_array($update['set'] ?? null)
+            && is_string($update['where'] ?? null)
+            && is_array($update['whereValues'] ?? null)
+        ) {
+            $entity = $update['entity'] ?? null;
+            if ($entity !== null && $this->metadataRegistry->getMetadata($entity::class)->getVersionColumns() !== []) {
+                throw UpdateConflictException::versionedEntityMerged($this->updateConflictResolutionStrategy::class, $entity::class);
+            }
+
+            return new MergedUpdate(
+                table: $update['table'],
+                entity: $entity,
+                set: $update['set'],
+                where: $update['where'],
+                whereValues: $update['whereValues'],
+            );
+        }
+
+        if (
+            is_array($update)
+            && !isset($update['table'])
+            && is_object($update['entity'] ?? null)
+            && is_array($update['changes'] ?? null)
+        ) {
+            return new EntityUpdate($update['entity'], $update['changes']);
+        }
+
+        throw UpdateConflictException::malformedStrategyOutput($this->updateConflictResolutionStrategy::class);
     }
 
     /**

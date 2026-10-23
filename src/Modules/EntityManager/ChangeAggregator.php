@@ -66,9 +66,14 @@ class ChangeAggregator {
             && is_string($update['where'] ?? null)
             && is_array($update['whereValues'] ?? null)
         ) {
+            $entity = $update['entity'] ?? null;
+            if ($entity !== null && $this->metadataRegistry->getMetadata($entity::class)->getVersionColumns() !== []) {
+                throw UpdateConflictException::versionedEntityMerged($this->updateConflictResolutionStrategy::class, $entity::class);
+            }
+
             return new MergedUpdate(
                 table: $update['table'],
-                entity: $update['entity'] ?? null,
+                entity: $entity,
                 set: $update['set'],
                 where: $update['where'],
                 whereValues: $update['whereValues'],

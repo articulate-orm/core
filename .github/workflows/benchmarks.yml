@@ -1,0 +1,82 @@
+name: Benchmarks
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    env:
+      DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+      DATABASE_HOST: 127.0.0.1
+      DATABASE_HOST_PGSQL: 127.0.0.1
+      DATABASE_USER: root
+      DATABASE_NAME: ${{ vars.DATABASE_NAME }}
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+          MYSQL_DATABASE: ${{ vars.DATABASE_NAME }}
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v7
+        with:
+          path: head
+
+      - name: Checkout base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo, pdo_mysql
+          tools: composer:v2
+
+      - name: Create .env files
+        run: |
+          for dir in base head; do
+            printf 'DATABASE_HOST=127.0.0.1\nDATABASE_HOST_PGSQL=127.0.0.1\nDATABASE_USER=root\nDATABASE_PASSWORD=%s\nDATABASE_NAME=%s\n' \
+              "$DATABASE_PASSWORD" "$DATABASE_NAME" > "$dir/.env"
+          done
+
+      - name: Install dependencies
+        run: |
+          composer install --no-progress --prefer-dist --working-dir=head
+          # The base may predate the benchmark suite: run the PR's benchmarks against the base's src.
+          composer install --no-progress --prefer-dist --working-dir=base
+          rm -rf base/benchmarks base/tests/Performance
+          cp -r head/benchmarks base/benchmarks
+          cp head/phpbench.json base/phpbench.json
+          composer require --dev --working-dir=base --no-progress phpbench/phpbench:^1.7
+
+      - name: Benchmark base
+        working-directory: base
+        run: vendor/bin/phpbench run benchmarks --tag=base --store --progress=none
+
+      - name: Benchmark PR and compare
+        working-directory: head
+        run: |
+          cp -r ../base/build build
+          vendor/bin/phpbench run benchmarks --ref=base --report=aggregate --progress=none | tee ../bench-report.txt
+          {
+            echo '### Benchmarks (PR vs base, MySQL, noisy shared runner)'
+            echo '```'
+            cat ../bench-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

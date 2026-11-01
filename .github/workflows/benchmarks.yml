@@ -63,6 +63,8 @@ jobs:
           rm -rf base/benchmarks base/tests/Performance
           cp -r head/benchmarks base/benchmarks
           cp head/phpbench.json base/phpbench.json
+          jq '.["autoload-dev"]["psr-4"]["Articulate\\Benchmarks\\"] = "benchmarks/"' base/composer.json > base/composer.json.tmp
+          mv base/composer.json.tmp base/composer.json
           composer require --dev --working-dir=base --no-progress phpbench/phpbench:^1.7
 
       - name: Benchmark base

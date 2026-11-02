@@ -256,4 +256,49 @@ class EntityMetadataRegistryTest extends TestCase {
             $this->assertSame($relation->getPivotTableName(), $restoredRelation->getPivotTableName());
         }
     }
+
+    public function testClearMetadataOnlyRemovesTheClearedClassFromSharedTableIndex(): void
+    {
+        // TestEntity and TestSecondEntity both map to the 'test_entity' table
+        // (per testGetTableName above). Clearing one must keep the other in the
+        // table index — array_filter() with "!==" must survive, not become a
+        // same-value filter (NotIdentical mutant) or a passthrough (UnwrapArrayFilter).
+        $registry = new EntityMetadataRegistry();
+
+        $registry->getMetadata(TestEntity::class);
+        $registry->getMetadata(TestSecondEntity::class);
+
+        $registry->clearMetadata(TestEntity::class);
+
+        $this->assertFalse($registry->hasMetadata(TestEntity::class));
+        $this->assertTrue($registry->hasMetadata(TestSecondEntity::class));
+        $this->assertSame(
+            [TestSecondEntity::class],
+            $registry->getClassesByTable('test_entity'),
+        );
+    }
+
+    public function testClearAllWorksWithoutCacheConfigured(): void
+    {
+        // Covers NullSafeMethodCall mutants on $this->cache?->clear() /
+        // ?->deleteItem(): with no cache pool, these must be safely skipped,
+        // not throw on a call to a method on null.
+        $registry = new EntityMetadataRegistry();
+
+        $registry->getMetadata(TestEntity::class);
+        $registry->clearAll();
+
+        $this->assertFalse($registry->hasMetadata(TestEntity::class));
+        $this->assertSame([], $registry->getClassesByTable('test_entity'));
+    }
+
+    public function testClearMetadataWorksWithoutCacheConfigured(): void
+    {
+        $registry = new EntityMetadataRegistry();
+
+        $registry->getMetadata(TestEntity::class);
+        $registry->clearMetadata(TestEntity::class);
+
+        $this->assertFalse($registry->hasMetadata(TestEntity::class));
+    }
 }

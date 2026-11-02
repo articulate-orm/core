@@ -389,4 +389,90 @@ class PostgresqlSchemaReaderTest extends AbstractTestCase {
             $this->assertEquals($expected, $result, 'Failed for input: ' . var_export($input, true));
         }
     }
+
+    #[AllowMockObjectsWithoutExpectations]
+    public function testGetTableColumnsExceptionUsesZeroCode(): void
+    {
+        $this->mockConnection->expects($this->once())
+            ->method('executeQuery')
+            ->willThrowException(new PDOException('boom'));
+
+        try {
+            $this->reader->getTableColumns('test_table');
+            $this->fail('Expected DatabaseSchemaException.');
+        } catch (DatabaseSchemaException $e) {
+            $this->assertSame(0, $e->getCode());
+        }
+    }
+
+    public function testGetTableIndexesNormalizesUppercaseColumnKeys(): void
+    {
+        $tableName = 'test_table';
+
+        $this->mockStatement->method('fetchAll')
+            ->willReturn([
+                [
+                    'INDEX_NAME' => 'idx_name',
+                    'COLUMN_NAME' => 'name',
+                    'IS_UNIQUE' => false,
+                    'IS_PRIMARY' => false,
+                ],
+            ]);
+
+        $this->mockConnection->expects($this->once())
+            ->method('executeQuery')
+            ->willReturn($this->mockStatement);
+
+        $indexes = $this->reader->getTableIndexes($tableName);
+
+        $this->assertArrayHasKey('idx_name', $indexes);
+        $this->assertEquals(['name'], $indexes['idx_name']['columns']);
+    }
+
+    public function testGetTableIndexesMarksPrimaryColumnsAsUniqueEvenWhenNotExplicitlyUnique(): void
+    {
+        $tableName = 'test_table';
+
+        $this->mockStatement->method('fetchAll')
+            ->willReturn([
+                [
+                    'index_name' => 'test_table_pkey',
+                    'column_name' => 'id',
+                    'is_unique' => false,
+                    'is_primary' => true,
+                ],
+            ]);
+
+        $this->mockConnection->expects($this->once())
+            ->method('executeQuery')
+            ->willReturn($this->mockStatement);
+
+        $indexes = $this->reader->getTableIndexes($tableName);
+
+        $this->assertTrue($indexes['test_table_pkey']['unique']);
+    }
+
+    public function testGetTableForeignKeysNormalizesUppercaseColumnKeys(): void
+    {
+        $tableName = 'test_table';
+
+        $this->mockStatement->method('fetchAll')
+            ->willReturn([
+                [
+                    'CONSTRAINT_NAME' => 'fk_user_id',
+                    'COLUMN_NAME' => 'user_id',
+                    'REFERENCED_TABLE_NAME' => 'users',
+                    'REFERENCED_COLUMN_NAME' => 'id',
+                ],
+            ]);
+
+        $this->mockConnection->expects($this->once())
+            ->method('executeQuery')
+            ->willReturn($this->mockStatement);
+
+        $foreignKeys = $this->reader->getTableForeignKeys($tableName);
+
+        $this->assertArrayHasKey('fk_user_id', $foreignKeys);
+        $this->assertEquals('user_id', $foreignKeys['fk_user_id']['column']);
+    }
 }

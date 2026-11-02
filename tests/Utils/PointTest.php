@@ -124,4 +124,33 @@ class PointTest extends TestCase {
         $this->assertSame(123.0, $point->x);
         $this->assertSame(0.00456, $point->y);
     }
+
+    public function testFromStringRejectsTrailingContentAfterClosingParen(): void
+    {
+        // Covers PregMatchRemoveDollar: without the trailing $ anchor, trailing
+        // garbage after the closing paren would still match.
+        $this->expectException(\InvalidArgumentException::class);
+        Point::fromString('POINT(1.0 2.0) garbage');
+    }
+
+    public function testFromStringRejectsLeadingContentBeforePoint(): void
+    {
+        // Covers PregMatchRemoveCaret: without the leading ^ anchor, leading
+        // garbage before POINT( would still match.
+        $this->expectException(\InvalidArgumentException::class);
+        Point::fromString('garbage POINT(1.0 2.0)');
+    }
+
+    public function testFromStringCastsBothCoordinatesToFloatIndependently(): void
+    {
+        // Covers CastFloat mutants on $matches[1]/$matches[2] individually: if only
+        // one side were cast, passing numeric strings would still produce a Point
+        // whose x/y are not strict floats on the affected side.
+        $point = Point::fromString('POINT(7 9)');
+
+        $this->assertIsFloat($point->x);
+        $this->assertIsFloat($point->y);
+        $this->assertSame(7.0, $point->x);
+        $this->assertSame(9.0, $point->y);
+    }
 }

@@ -401,6 +401,65 @@ class ConnectionTest extends AbstractTestCase {
         return $deadlock;
     }
 
+    public function testEmulatePreparesIsDisabled(): void
+    {
+        $connection = ConnectionPool::getInstance()->getMysqlConnection();
+        $this->assertNotNull($connection);
+
+        $pdo = $this->extractPdo($connection);
+        $this->assertFalse($pdo->getAttribute(\PDO::ATTR_EMULATE_PREPARES));
+    }
+
+    public function testNonPersistentConnectionDoesNotSetPersistentAttribute(): void
+    {
+        $host = getenv('DATABASE_HOST') ?: '127.0.0.1';
+        $name = getenv('DATABASE_NAME') ?: 'articulate_test';
+        $user = getenv('DATABASE_USER') ?: 'root';
+        $password = getenv('DATABASE_PASSWORD') ?: '';
+
+        $connection = new Connection(
+            'mysql:host=' . $host . ';dbname=' . $name . ';charset=utf8mb4',
+            $user,
+            $password,
+            persistent: false,
+        );
+
+        $pdo = $this->extractPdo($connection);
+        $this->assertFalse($pdo->getAttribute(\PDO::ATTR_PERSISTENT));
+    }
+
+    private function extractPdo(Connection $connection): \PDO
+    {
+        $reflection = new \ReflectionClass($connection);
+        $property = $reflection->getProperty('pdo');
+        $property->setAccessible(true);
+
+        return $property->getValue($connection);
+    }
+
+    public function testReleaseSavepointActuallyPreventsFurtherRollbackToIt(): void
+    {
+        $connection = ConnectionPool::getInstance()->getMysqlConnection();
+        $this->assertNotNull($connection);
+
+        if ($connection->inTransaction()) {
+            $connection->rollbackTransaction();
+        }
+
+        $connection->beginTransaction();
+        $connection->createSavepoint('sp_release_test');
+        $connection->releaseSavepoint('sp_release_test');
+
+        // The savepoint no longer exists, so rolling back to it must fail.
+        $this->expectException(\PDOException::class);
+
+        try {
+            $connection->rollbackToSavepoint('sp_release_test');
+        } finally {
+            $connection->rollbackTransaction();
+        }
+    }
+
     protected function setUpTestTables(Connection $connection, string $databaseName): bool
     {
         return true;

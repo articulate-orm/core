@@ -6,7 +6,9 @@ use Articulate\Attributes\Entity;
 use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Property;
 use Articulate\Attributes\Relations\OneToMany;
+use Articulate\Attributes\VersionAware;
 use Articulate\Schema\EntityMetadata;
+use Articulate\Tests\Attributes\SoftDeleteableDefaultEntity;
 use PHPUnit\Framework\TestCase;
 
 #[Entity(tableName: 'test_users')]
@@ -154,4 +156,48 @@ class EntityMetadataTest extends TestCase {
 
         new EntityMetadata(\stdClass::class);
     }
+
+    public function testGetSoftDeleteColumnReturnsNullWhenNotSoftDeleteable(): void
+    {
+        // Covers NullSafePropertyCall mutant removing the ?-> null-safety:
+        // for an entity without #[SoftDeleteable], softDeleteable is null, and
+        // accessing ->columnName directly on null would throw instead of
+        // returning null.
+        $metadata = new EntityMetadata(TestEntityMetadataUser::class);
+
+        $this->assertNull($metadata->getSoftDeleteColumn());
+    }
+
+    public function testGetSoftDeleteColumnReturnsColumnNameWhenSoftDeleteable(): void
+    {
+        $metadata = new EntityMetadata(SoftDeleteableDefaultEntity::class);
+
+        $this->assertSame('deleted_at', $metadata->getSoftDeleteColumn());
+    }
+
+    public function testGetAcknowledgedVersionColumnsReturnsEmptyArrayWithoutVersionAware(): void
+    {
+        $metadata = new EntityMetadata(TestEntityMetadataUser::class);
+
+        $this->assertSame([], $metadata->getAcknowledgedVersionColumns());
+    }
+
+    public function testGetAcknowledgedVersionColumnsReturnsReindexedListFromVersionAware(): void
+    {
+        // Covers UnwrapArrayValues mutant: array_values() must reindex the
+        // VersionAware columns array even if it was originally keyed/sparse.
+        $metadata = new EntityMetadata(EntityMetadataVersionAwareEntity::class);
+
+        $columns = $metadata->getAcknowledgedVersionColumns();
+
+        $this->assertSame(['balance_version', 'stock_version'], $columns);
+        $this->assertSame([0, 1], array_keys($columns));
+    }
+}
+
+#[Entity]
+#[VersionAware(['balance_version', 'stock_version'])]
+class EntityMetadataVersionAwareEntity {
+    #[PrimaryKey]
+    public int $id;
 }

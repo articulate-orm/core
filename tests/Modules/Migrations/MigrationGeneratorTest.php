@@ -193,6 +193,28 @@ class MigrationGeneratorTest extends AbstractTestCase {
         $this->generator->generate('TestNamespace', 'Invalid Class!', 'SELECT 1', 'SELECT 1');
     }
 
+    public function testGenerateRejectsClassNameWithLeadingGarbageEvenIfSuffixValid(): void
+    {
+        // Covers PregMatchRemoveCaret: without the leading ^ anchor, a class
+        // name with invalid leading characters followed by a valid identifier
+        // suffix would incorrectly pass validation.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->generator->generate('TestNamespace', '!!!ValidSuffix', 'SELECT 1', 'SELECT 1');
+    }
+
+    public function testGenerateCreatesDirectoryWithStandardPermissions(): void
+    {
+        // Covers DecrementInteger/IncrementInteger mutants on the mkdir() mode
+        // argument (0755 -> 0754/0756 decimal variants).
+        $this->generator->generate('TestNamespace', 'PermissionsMigration', 'SELECT 1;', 'SELECT 1;');
+
+        $dir = $this->tempDir . '/' . date('Y') . '/' . date('m');
+        $this->assertDirectoryExists($dir);
+
+        $perms = fileperms($dir) & 0777;
+        $this->assertSame(0755, $perms);
+    }
+
     private function removeDirectory(string $dir): void
     {
         if (!is_dir($dir)) {

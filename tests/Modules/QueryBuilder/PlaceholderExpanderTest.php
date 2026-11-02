@@ -74,4 +74,26 @@ class PlaceholderExpanderTest extends TestCase {
         $this->assertSame("SELECT * FROM users WHERE id IN ({$expectedPlaceholders})", $sql);
         $this->assertSame($ids, $params);
     }
+
+    /**
+     * Mutant (ID 0845627596e3cea939eaece4eb204d71): DecrementInteger on
+     * `array_fill(0, $count, '?')` → `array_fill(-1, $count, '?')` (PlaceholderExpander.php:37).
+     * Verified equivalent: array_fill()'s start index only changes the produced array's KEYS
+     * (e.g. [-1=>'?',0=>'?',1=>'?'] vs [0=>'?',1=>'?',2=>'?']) — both arrays have the same
+     * count and the same values, and implode() is key-agnostic, so the compiled SQL string is
+     * byte-identical either way. No test of the public expand() contract can distinguish the
+     * two; this is left unaddressed deliberately rather than asserting on PHP array-key
+     * internals that aren't part of PlaceholderExpander's behavior.
+     */
+    public function testExpandWithThreeElementArrayProducesExactlyThreePlaceholders(): void
+    {
+        [$sql, $params] = PlaceholderExpander::expand(
+            'SELECT * FROM users WHERE id IN (?)',
+            [[7, 8, 9]]
+        );
+
+        $this->assertSame('SELECT * FROM users WHERE id IN (?,?,?)', $sql);
+        $this->assertSame(3, substr_count($sql, '?'));
+        $this->assertSame([7, 8, 9], $params);
+    }
 }

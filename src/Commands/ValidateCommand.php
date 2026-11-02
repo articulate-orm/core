@@ -96,7 +96,9 @@ class ValidateCommand extends Command {
      *    nor a #[VersionAware] naming that version column (downgraded to a
      *    warning when $lenient is set);
      *  - error ("rival counters") when two distinct #[Version] columns have
-     *    overlapping guard sets (never downgraded).
+     *    overlapping guard sets (never downgraded);
+     *  - error when a slice maps another slice's #[Version] column as a plain
+     *    property (never downgraded, not cleared by #[VersionAware]).
      *
      * @param ReflectionEntity[] $entityClasses
      * @return array{errors: int, warnings: int}
@@ -150,6 +152,26 @@ class ValidateCommand extends Command {
             foreach ($metadataGroup as $metadata) {
                 $ownVersionColumns = $metadata->getVersionColumns();
                 $acknowledged = $metadata->getAcknowledgedVersionColumns();
+
+                // A version column is ORM-managed. Only the slice declaring it via #[Version]
+                // gets the bump/check and the ManagedVersionColumnException guard; a sibling
+                // mapping the same column as a plain #[Property] could overwrite the counter
+                // with an arbitrary value, bypassing both. Never downgraded, #[VersionAware]
+                // does not clear it.
+                foreach (array_intersect($metadata->getColumnNames(), array_keys($guardSets)) as $versionColumn) {
+                    if (in_array($versionColumn, $ownVersionColumns, true)) {
+                        continue;
+                    }
+
+                    $errors++;
+                    $io->error(sprintf(
+                        'Class "%s" maps #[Version] column "%s" of table "%s" as a plain property; '
+                        . 'only a #[Version] property may map a version column.',
+                        $metadata->getClassName(),
+                        $versionColumn,
+                        $tableName,
+                    ));
+                }
 
                 foreach ($guardSets as $versionColumn => $guardedColumns) {
                     if (in_array($versionColumn, $ownVersionColumns, true)) {

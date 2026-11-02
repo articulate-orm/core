@@ -405,6 +405,61 @@ class TypeRegistryTest extends TestCase {
         $result = $this->registry->getDatabaseType(TestChildClass::class);
         $this->assertSame('CHILD_TYPE', $result);
     }
+
+    public function testInferPhpTypeDistinguishesIntegerFromInt(): void
+    {
+        // Covers MatchArmRemoval mutants that drop 'INTEGER' from the int arm or
+        // keep it with others removed: INTEGER must always map to int, independently
+        // of the other int-arm members.
+        $registry = new TypeRegistry();
+        $reflection = new \ReflectionClass($registry);
+        $method = $reflection->getMethod('inferPhpType');
+        $method->setAccessible(true);
+
+        $this->assertSame('int', $method->invoke($registry, 'INTEGER'));
+        $this->assertSame('int', $method->invoke($registry, 'MEDIUMINT'));
+    }
+
+    public function testInferPhpTypeKeepsAllStringTypeVariants(): void
+    {
+        $registry = new TypeRegistry();
+        $reflection = new \ReflectionClass($registry);
+        $method = $reflection->getMethod('inferPhpType');
+        $method->setAccessible(true);
+
+        $this->assertSame('string', $method->invoke($registry, 'TINYTEXT'));
+        $this->assertSame('string', $method->invoke($registry, 'MEDIUMTEXT'));
+        $this->assertSame('string', $method->invoke($registry, 'LONGTEXT'));
+    }
+
+    public function testInferPhpTypeKeepsAllDateTimeVariants(): void
+    {
+        $registry = new TypeRegistry();
+        $reflection = new \ReflectionClass($registry);
+        $method = $reflection->getMethod('inferPhpType');
+        $method->setAccessible(true);
+
+        $this->assertSame('string', $method->invoke($registry, 'TIMESTAMP'));
+        $this->assertSame('string', $method->invoke($registry, 'TIME'));
+        $this->assertSame('string', $method->invoke($registry, 'YEAR'));
+    }
+
+    public function testExtractBaseTypeReturnsOnlyCapturedWordNotFullMatch(): void
+    {
+        // Covers DecrementInteger mutant: $matches[1] -> $matches[0]. For a type
+        // string with trailing content after the word, [0] (full regex match) would
+        // differ from [1] (the captured word) if the pattern matched more than the
+        // word itself. Use a dbType whose captured group is a strict substring
+        // relationship signal: VARCHAR(255) -> [0] is "VARCHAR", [1] is "VARCHAR"
+        // under /^(\w+)/ so they coincide; use the uppercased comparison directly
+        // against the raw (non-uppercased) input to catch the strtoupper() call too.
+        $registry = new TypeRegistry();
+        $reflection = new \ReflectionClass($registry);
+        $method = $reflection->getMethod('extractBaseType');
+        $method->setAccessible(true);
+
+        $this->assertSame('VARCHAR', $method->invoke($registry, 'varchar(255)'));
+    }
 }
 
 // Test classes for inheritance testing

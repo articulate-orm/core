@@ -177,4 +177,15 @@ class LockTest extends DatabaseTestCase {
         $sqlAfterReset = $qb->getSQL();
         $this->assertStringNotContainsString('FOR UPDATE', $sqlAfterReset);
     }
+
+    protected function tearDownTestTables(Connection $connection, string $databaseName): void
+    {
+        if ($databaseName === 'mysql') {
+            $connection->executeQuery('SET FOREIGN_KEY_CHECKS = 0');
+            $connection->executeQuery('DROP TABLE IF EXISTS `test_users`');
+            $connection->executeQuery('SET FOREIGN_KEY_CHECKS = 1');
+        } else {
+            $connection->executeQuery('DROP TABLE IF EXISTS "test_users" CASCADE');
+        }
+    }
 }

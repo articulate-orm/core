@@ -2,6 +2,9 @@
 
 Context-bounded ORM for modular PHP applications that share database tables across modules.
 
+> **Using an AI coding assistant?** Point it at [`AI.md`](./AI.md) for a
+> compact, agent-oriented summary of how to use this library correctly.
+
 ## Why Articulate?
 
 Most ORMs make the table/entity boundary the modeling boundary: one table, one primary entity class. In modular systems, that turns shared tables into shared domain objects.
@@ -21,7 +24,7 @@ Articulate still provides the expected ORM foundations: attributes, repositories
 ## Badges
 
 [![CI](https://github.com/articulate-orm/core/workflows/QA/badge.svg)](https://github.com/articulate-orm/core/actions)
-[![Mutation testing](https://img.shields.io/badge/Mutation%20Score-78.57%25-yellow)](https://github.com/articulate-orm/core/actions)
+[![Mutation testing](https://img.shields.io/badge/Mutation%20Score-92.93%25-brightgreen)](https://github.com/articulate-orm/core/actions)
 [![PHP Version](https://img.shields.io/badge/php-%3E%3D8.4-8892BF.svg)](https://php.net/)
 
 ## What Makes It Different?
@@ -217,7 +220,7 @@ $em->flush(); // throws OptimisticLockException: WHERE version = 3 matched 0 row
 
 **Recovering from a conflict.** A flush that throws rolls its transaction back and leaves the entities' in-memory `#[Version]` properties at their pre-flush values — the `+1` bump is applied just before post-update callbacks (so a `#[PostUpdate]` handler sees the value the row now carries) and reverted if the flush never commits. So the failed flush does not poison a retry: re-`find()` the entity (or resolve the conflict another way) and flush again. There is no "EM is now closed" state to reset. Do not, however, write the same row through two different `#[Version]`-checking classes in a single flush — the first `UPDATE` bumps the shared column and the second then conflicts with itself.
 
-**Run `articulate:validate` in CI.** The guard-set guarantee holds only if it is enforced: there is no runtime check, so a slice writing a column inside a sibling's guard set silently drops out of that guard's lost-update detection until `validate` catches it. It errors on **rival counters** — two distinct `#[Version]` columns on a table whose guard sets overlap (never downgraded) — and on a slice persisting a column inside another slice's guard set without its own `#[Version]` or a `#[VersionAware]` acknowledgement of that version column. The `--lenient` flag downgrades the missing-acknowledgement error to a warning.
+**Run `articulate:validate` in CI.** The guard-set guarantee holds only if it is enforced: there is no runtime check, so a slice writing a column inside a sibling's guard set silently drops out of that guard's lost-update detection until `validate` catches it. It errors on **rival counters** — two distinct `#[Version]` columns on a table whose guard sets overlap (never downgraded) — and on a slice persisting a column inside another slice's guard set without its own `#[Version]` or a `#[VersionAware]` acknowledgement of that version column. It also errors on a slice mapping another slice's `#[Version]` column as a plain `#[Property]` (never downgraded, not cleared by `#[VersionAware]`): `ManagedVersionColumnException` only guards the class that owns the column through `#[Version]`, so at runtime such a sibling can overwrite the counter with any value, and only `validate` catches it. The `--lenient` flag downgrades the missing-acknowledgement error to a warning.
 
 ### Memory-Efficient Unit of Work
 

@@ -3,6 +3,7 @@
 namespace Articulate\Tests\Modules\QueryBuilder;
 
 use Articulate\Attributes\Entity;
+use Articulate\Attributes\Property;
 use Articulate\Connection;
 use Articulate\Modules\EntityManager\EntityManager;
 use Articulate\Modules\QueryBuilder\QueryBuilder;
@@ -14,12 +15,22 @@ use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Schema\HydratorInterface;
 use Articulate\Schema\ManagedEntityStoreInterface;
 use Articulate\Tests\DatabaseTestCase;
+use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 #[Entity]
 class EntityManagerTestEntity {
     public int $id;
 
+    public string $name;
+}
+
+#[Entity]
+class SubQueryColumnResolutionEntity {
+    #[Property]
+    public int $id;
+
+    #[Property]
     public string $name;
 }
 
@@ -76,6 +87,45 @@ class QueryBuilderTest extends DatabaseTestCase {
 
         $this->assertEquals('SELECT id, name FROM users WHERE id = ?', $sql);
         $this->assertEquals([1], $params);
+    }
+
+    /**
+     * Mutant: MethodCallRemoval on `$subBuilder->sqlCompiler->setEntityClass(...)` in
+     * createSubQueryBuilder(). Without it, a sub-query built via whereExists()/createSubQueryBuilder()
+     * loses the parent's entity class, so SqlCompiler::buildSelectClause() can't resolve an
+     * empty select to the entity's declared columns and falls back to '*'.
+     */
+    #[DataProvider('databaseProvider')]
+    public function testSubQueryBuilderInheritsEntityClassForColumnResolution(string $databaseName): void
+    {
+        $this->setCurrentDatabase($this->getConnection($databaseName), $databaseName);
+        $this->connection = $this->getCurrentConnection();
+        $registry = new EntityMetadataRegistry();
+        $this->qb = new QueryBuilder($this->connection, null, $registry);
+        $this->qb->setEntityClass(SubQueryColumnResolutionEntity::class);
+
+        $subQuery = $this->qb->createSubQueryBuilder();
+        $subQuery->from('subquerycolumnresolutionentities');
+
+        $this->assertSame('SELECT id, name FROM subquerycolumnresolutionentities', $subQuery->getSQL());
+    }
+
+    /**
+     * Mutant: MethodCallRemoval on `$this->assertValidFieldIdentifier($alias)` in from().
+     * Without it, an invalid alias (e.g. containing SQL-breaking characters) would silently
+     * flow through into the compiled FROM clause instead of being rejected.
+     */
+    #[DataProvider('databaseProvider')]
+    public function testFromRejectsInvalidAlias(string $databaseName): void
+    {
+        $this->setCurrentDatabase($this->getConnection($databaseName), $databaseName);
+        $this->connection = $this->getCurrentConnection();
+        $this->qb = new QueryBuilder($this->connection);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage("Invalid field identifier 'users; DROP TABLE'.");
+
+        $this->qb->from('accounts', 'users; DROP TABLE');
     }
 
     #[DataProvider('databaseProvider')]
@@ -964,7 +1014,7 @@ class QueryBuilderTest extends DatabaseTestCase {
     {
         $connection = $this->createStub(Connection::class);
         $qb = new QueryBuilder($connection);
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
         $qb->orderBy('invalid!field', 'ASC');
     }
 

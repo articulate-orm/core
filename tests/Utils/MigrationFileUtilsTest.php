@@ -299,4 +299,24 @@ PHP;
 
         $this->assertSame('BOM\Namespace', $result);
     }
+
+    public function testGetNamespaceFromFileRejectsTrailingContentAfterNamespaceKeyword(): void
+    {
+        // Covers PregMatchRemoveCaret: without the leading ^ anchor, a line
+        // with text before "namespace" (not at the start of the trimmed line)
+        // would still match and incorrectly extract a namespace.
+        $fileContent = <<<'PHP'
+<?php
+// not a namespace keyword at line start
+#namespace Fake\Namespace;
+class Test {}
+PHP;
+
+        $filePath = $this->tempDir . '/NotAtStart.php';
+        file_put_contents($filePath, $fileContent);
+
+        $result = MigrationFileUtils::getNamespaceFromFile($filePath);
+
+        $this->assertNull($result);
+    }
 }

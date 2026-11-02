@@ -15,8 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Second-level cache keys (collection and per-entity) are now namespaced per connection
   (`Connection::getCacheNamespace()`), so connections to different databases can share one pool
   safely. Existing per-entity entries are not reused after upgrading.
-- Cached id-lists are refreshed by TTL only until exact invalidation lands: rows inserted after an
-  id-list was cached do not appear until it expires.
+- Exact invalidation: updating, deleting or soft-deleting a row evicts precisely the cached id-lists
+  that contain it, via a reverse index (`l2qidx_` + sha256 of connection namespace, table and
+  type-tagged id). A hit is cross-validated against the reverse index and discarded wholesale if
+  any entry is missing. Rows *inserted* after an id-list was cached still do not appear until it
+  expires.
+- All collection-cache keys (`l2q_`, `l2qidx_`) contain only PSR-6-safe characters (no `:`), so
+  strict pools such as Symfony Cache accept them.
 - `symfony/cache` added as a dev dependency (PSR-6 key validation in tests).
 
 ## [2.0.0]

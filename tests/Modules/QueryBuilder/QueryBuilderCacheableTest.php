@@ -479,7 +479,7 @@ class QueryBuilderCacheableTest extends DatabaseTestCase {
 
         $this->assertSame(3, $cache->saveDeferredCalls, 'Entity rows are queued, one per row.');
         $this->assertSame(1, $cache->commitCalls, 'and flushed with a single commit.');
-        $this->assertSame(1, $cache->saveCalls, 'Only the id-list is saved individually.');
+        $this->assertSame(1 + 3, $cache->saveCalls, 'The id-list plus one reverse-index entry per id are saved individually.');
 
         $em->clear();
         $getItemBefore = $cache->getItemCalls;
@@ -490,7 +490,7 @@ class QueryBuilderCacheableTest extends DatabaseTestCase {
         $this->assertSame(['A', 'B', 'C'], array_map(fn (object $p): string => $p->name, $result));
         $this->assertSame(1, $logger->selectCount);
         $this->assertSame(1, $cache->getItemCalls - $getItemBefore, 'Only the id-list lookup uses getItem().');
-        $this->assertSame(1, $cache->getItemsCalls - $getItemsBefore, 'All entities resolve in one getItems() call.');
+        $this->assertSame(2, $cache->getItemsCalls - $getItemsBefore, 'One getItems() cross-validates the reverse index, one resolves all entities.');
     }
 
     #[DataProvider('databaseProvider')]

@@ -73,6 +73,11 @@ parameters:
         - type: directory
           value: src/Commands
 
+    - name: Cache
+      collectors:
+        - type: directory
+          value: src/Modules/Cache
+
   ruleset:
     Tests:
       - Attributes
@@ -88,6 +93,7 @@ parameters:
       - Migrations
       - QueryBuilder
       - Commands
+      - Cache
 
     Attributes:
       - Schema
@@ -110,6 +116,7 @@ parameters:
       - QueryBuilder
       - Generators
       - Schema
+      - Cache
 
     Migrations:
       - Database
@@ -122,6 +129,7 @@ parameters:
       - Exceptions
       - Attributes
       - Utils
+      - Cache
 
     Repository:
       - EntityManager
@@ -139,3 +147,7 @@ parameters:
       - Attributes
       - Migrations
       - Schema
+
+    Cache:
+      - Exceptions
+      - Utils

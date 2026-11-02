@@ -5,6 +5,20 @@ All notable changes to `articulate-orm/core` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- New `QueryBuilder::cacheable(?int $ttl = null)`: opt a query into the collection (query-region)
+  second-level cache. The matched id-list is cached; entities resolve from the identity map or the
+  per-entity second-level cache, and any unresolvable id discards the whole cached list and re-queries.
+  Silent no-op without a configured `secondLevelCache` pool, for `lock()` queries, aggregates,
+  custom hydrators and composite primary keys. See `docs/adr/0002`.
+- Second-level cache keys (collection and per-entity) are now namespaced per connection
+  (`Connection::getCacheNamespace()`), so connections to different databases can share one pool
+  safely. Existing per-entity entries are not reused after upgrading.
+- Cached id-lists are refreshed by TTL only until exact invalidation lands: rows inserted after an
+  id-list was cached do not appear until it expires.
+- `symfony/cache` added as a dev dependency (PSR-6 key validation in tests).
+
 ## [2.0.0]
 
 - Optimistic locking moves from a **row-wide** version model to a **per-slice** one (BREAKING). See `docs/adr/0001-per-slice-version-guards.md`.

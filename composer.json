@@ -31,7 +31,8 @@
         "deptrac/deptrac": "^4.6",
         "phpmd/phpmd": "^2.15 || ^3.0",
         "phpstan/phpstan": "^2.0",
-        "phpbench/phpbench": "^1.7"
+        "phpbench/phpbench": "^1.7",
+        "symfony/cache": "^8.0"
     },
     "require": {
         "php": ">=8.4",

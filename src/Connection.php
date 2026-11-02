@@ -63,6 +63,11 @@ class Connection {
         return $parameters;
     }
 
+    public function getCacheNamespace(): string
+    {
+        return substr(hash('sha256', $this->dsn), 0, 16);
+    }
+
     public function getDriverName(): string
     {
         return $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);

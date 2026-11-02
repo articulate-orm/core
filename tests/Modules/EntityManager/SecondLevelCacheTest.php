@@ -8,6 +8,8 @@ use Articulate\Attributes\Property;
 use Articulate\Connection;
 use Articulate\Modules\EntityManager\EntityManager;
 use Articulate\Modules\EntityManager\SecondLevelCache;
+use Articulate\Modules\EntityManager\UpdateConflictResolutionStrategy;
+use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Tests\DatabaseTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Cache\CacheItemInterface;
@@ -160,6 +162,27 @@ class FailingCache extends L2ArrayCache {
     public function deleteItem(string $key): never
     {
         throw new \RuntimeException('Cache backend failure');
+    }
+}
+
+class EntitylessMergedUpdateStrategy implements UpdateConflictResolutionStrategy {
+    /**
+     * @param array<int, array{entity: object, changes: array<string, mixed>}> $updates
+     * @return array<int, array{table: string, set: array<string, mixed>, where: string, whereValues: array<int, mixed>}>
+     */
+    public function resolve(array $updates, EntityMetadataRegistry $metadataRegistry): array
+    {
+        $merged = [];
+        foreach ($updates as $update) {
+            $merged[] = [
+                'table' => 'l2_cache_users',
+                'set' => ['name' => $update['entity']->name],
+                'where' => 'id = ?',
+                'whereValues' => [$update['entity']->id],
+            ];
+        }
+
+        return $merged;
     }
 }
 
@@ -391,6 +414,31 @@ class SecondLevelCacheTest extends DatabaseTestCase {
         $l2 = new SecondLevelCache($cache);
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUser::class, $id)), 'L2CacheUser cache entry should be evicted');
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUserSummary::class, $id)), 'L2CacheUserSummary cache entry should be evicted alongside sibling');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testFlushAcceptsMergedUpdateWithoutEntityFromCustomStrategy(string $databaseName): void
+    {
+        $this->setCurrentDatabase($this->getConnection($databaseName), $databaseName);
+        $connection = $this->getCurrentConnection();
+        $this->createUserTable($connection, $databaseName);
+
+        $connection->executeQuery("INSERT INTO l2_cache_users (name) VALUES ('Judy')");
+        $id = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'l2_cache_users_id_seq' : null);
+
+        $em = new EntityManager(
+            $connection,
+            updateConflictResolutionStrategy: new EntitylessMergedUpdateStrategy(),
+            secondLevelCache: new L2ArrayCache(),
+        );
+
+        $user = $em->find(L2CacheUser::class, $id);
+        $user->name = 'Judy Updated';
+        $em->persist($user);
+        $em->flush();
+
+        $row = $connection->executeQuery('SELECT name FROM l2_cache_users WHERE id = ?', [$id])->fetch();
+        $this->assertSame('Judy Updated', $row['name']);
     }
 
     // --- key normalization (no database needed) ------------------------------

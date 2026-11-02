@@ -3,11 +3,16 @@
 namespace Articulate\Tests\Modules\EntityManager;
 
 use Articulate\Attributes\Entity;
+use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Property;
+use Articulate\Attributes\Version;
 use Articulate\Connection;
+use Articulate\Exceptions\UpdateConflictException;
 use Articulate\Modules\EntityManager\ChangeAggregator;
 use Articulate\Modules\EntityManager\EntityManager;
 use Articulate\Modules\EntityManager\UnitOfWork;
+use Articulate\Modules\EntityManager\UpdateConflictResolutionStrategy;
+use Articulate\Schema\EntityMetadataRegistry;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\AbstractLogger;
 
@@ -19,6 +24,50 @@ class ChangeAggregatorTestLogger extends AbstractLogger {
     {
         $this->records[] = ['level' => (string) $level, 'message' => (string) $message, 'context' => $context];
     }
+}
+
+class MalformedUpdateConflictResolutionStrategy implements UpdateConflictResolutionStrategy {
+    /**
+     * @param array<int, array{entity: object, changes: array<string, mixed>}> $updates
+     * @return array<int, array{entity: object, changes: array<string, mixed>}>
+     */
+    public function resolve(array $updates, EntityMetadataRegistry $metadataRegistry): array
+    {
+        /** @var array<int, array{entity: object, changes: array<string, mixed>}> $missingEntity */
+        $missingEntity = [['changes' => ['name' => 'orphan']]];
+
+        return $missingEntity;
+    }
+}
+
+class MergingEverythingUpdateConflictResolutionStrategy implements UpdateConflictResolutionStrategy {
+    /**
+     * @param array<int, array{entity: object, changes: array<string, mixed>}> $updates
+     * @return array<int, array{table: string, entity: object, set: array<string, mixed>, where: string, whereValues: array<int, mixed>}>
+     */
+    public function resolve(array $updates, EntityMetadataRegistry $metadataRegistry): array
+    {
+        return array_map(static fn (array $update): array => [
+            'table' => 'versioned_aggregation_rows',
+            'entity' => $update['entity'],
+            'set' => $update['changes'],
+            'where' => 'id = ?',
+            'whereValues' => [1],
+        ], $updates);
+    }
+}
+
+#[Entity(tableName: 'versioned_aggregation_rows')]
+class VersionedEntityForChangeAggregation {
+    #[PrimaryKey]
+    public ?int $id = null;
+
+    #[Property]
+    public string $name = '';
+
+    #[Property]
+    #[Version]
+    public int $version = 0;
 }
 
 #[Entity]
@@ -266,7 +315,47 @@ class ChangeAggregatorTest extends TestCase {
 
         $this->assertCount(1, $result['deletes']);
         $this->assertCount(1, $result['updates'], 'Update for a different entity (different id) must survive delete-filtering');
-        $this->assertSame($toUpdate, $result['updates'][0]['entity']);
+        $this->assertSame($toUpdate, $result['updates'][0]->entity);
+    }
+
+    public function testMalformedStrategyOutputThrowsNamingTheStrategy(): void
+    {
+        $aggregator = new ChangeAggregator(
+            $this->entityManager->getMetadataRegistry(),
+            new MalformedUpdateConflictResolutionStrategy(),
+        );
+
+        $uow = new UnitOfWork(metadataRegistry: $this->entityManager->getMetadataRegistry());
+        $entity = new TestEntityForChangeAggregation();
+        $entity->id = 1;
+        $entity->name = 'Original';
+        $uow->registerManaged($entity, ['id' => 1, 'name' => 'Original', 'active' => true]);
+        $entity->name = 'Changed';
+
+        $this->expectException(UpdateConflictException::class);
+        $this->expectExceptionMessage(MalformedUpdateConflictResolutionStrategy::class);
+
+        $aggregator->aggregateChanges([$uow]);
+    }
+
+    public function testStrategyMergingVersionedEntityThrows(): void
+    {
+        $aggregator = new ChangeAggregator(
+            $this->entityManager->getMetadataRegistry(),
+            new MergingEverythingUpdateConflictResolutionStrategy(),
+        );
+
+        $uow = new UnitOfWork(metadataRegistry: $this->entityManager->getMetadataRegistry());
+        $entity = new VersionedEntityForChangeAggregation();
+        $entity->id = 1;
+        $entity->name = 'Original';
+        $uow->registerManaged($entity, ['id' => 1, 'name' => 'Original', 'version' => 0]);
+        $entity->name = 'Changed';
+
+        $this->expectException(UpdateConflictException::class);
+        $this->expectExceptionMessage(VersionedEntityForChangeAggregation::class);
+
+        $aggregator->aggregateChanges([$uow]);
     }
 }
 

@@ -13,7 +13,7 @@ class ChangeSetExecutor {
     }
 
     /**
-     * @param array{inserts: object[], updates: array<int, array{entity?: object, changes?: array, table?: string, set?: array, where?: string, whereValues?: array, versionBumpColumns?: string[]}>, deletes: object[], softDeletes: object[]} $changes
+     * @param array{inserts: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
      * @return list<DeferredVersionBump> In-memory #[Version] reconciliations; see EntityManager::flush().
      */
     public function execute(array $changes): array
@@ -31,23 +31,22 @@ class ChangeSetExecutor {
 
         $updatedEntities = [];
         foreach ($changes['updates'] as $update) {
-            if (isset($update['table'])) {
+            if ($update instanceof MergedUpdate) {
                 $this->queryExecutor->executeUpdateByTable(
-                    tableName: $update['table'],
-                    columnChanges: $update['set'],
-                    whereClause: $update['where'],
-                    whereValues: $update['whereValues'],
-                    versionBumpColumns: $update['versionBumpColumns'] ?? [],
+                    tableName: $update->table,
+                    columnChanges: $update->set,
+                    whereClause: $update->where,
+                    whereValues: $update->whereValues,
                 );
 
                 continue;
             }
 
-            $bump = $this->queryExecutor->executeUpdate($update['entity'], $update['changes']);
+            $bump = $this->queryExecutor->executeUpdate($update->entity, $update->changes);
             if ($bump !== null) {
                 $deferredVersionBumps[] = $bump;
             }
-            $updatedEntities[] = $update['entity'];
+            $updatedEntities[] = $update->entity;
         }
 
         foreach ($updatedEntities as $entity) {

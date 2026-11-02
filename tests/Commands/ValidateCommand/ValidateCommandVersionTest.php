@@ -8,71 +8,70 @@ use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Tester\CommandTester;
 
 class ValidateCommandVersionTest extends TestCase {
+    private const FIXTURES = __DIR__ . '/../../Schema/VersionGuard/Fixtures/';
+
+    private const FIXTURE_NAMESPACE = 'Articulate\\Tests\\Schema\\VersionGuard\\Fixtures\\';
+
     /**
      * @param array<string, mixed> $input
      */
-    private function runValidate(string $scenario, bool $lenientByDefault = false, array $input = []): CommandTester
+    private function runValidate(string $scenario, array $input = [], ?bool $lenientByDefault = null): CommandTester
     {
         $schemaComparator = $this->createStub(DatabaseSchemaComparator::class);
         $schemaComparator->method('compareAll')->willReturn([]);
 
-        $command = new ValidateCommand($schemaComparator, [__DIR__ . '/Fixtures/' . $scenario], lenientVersionChecks: $lenientByDefault);
+        $paths = [self::FIXTURES . $scenario];
+        $command = $lenientByDefault === null
+            ? new ValidateCommand($schemaComparator, $paths)
+            : new ValidateCommand($schemaComparator, $paths, lenientVersionChecks: $lenientByDefault);
         $tester = new CommandTester($command);
         $tester->execute($input);
 
         return $tester;
     }
 
-    public function testCosmeticSliceWithNoVersionAttributeValidatesClean(): void
+    private function flatDisplay(CommandTester $tester): string
     {
-        $tester = $this->runValidate('CosmeticSlice');
-
-        $this->assertSame(0, $tester->getStatusCode());
-        $this->assertStringContainsString('Schema is valid', $tester->getDisplay());
+        return (string) preg_replace('/\s+/', '', $tester->getDisplay());
     }
 
-    public function testSliceWritingGuardedColumnWithoutAcknowledgementErrors(): void
+    public function testFindingsFailTheCommandByDefault(): void
     {
         $tester = $this->runValidate('GuardedWriterUnacknowledged');
 
         $this->assertSame(1, $tester->getStatusCode());
-        $display = $tester->getDisplay();
-        $this->assertStringContainsString('status', $display);
-        $this->assertStringContainsString('#[Version] column "version"', $display);
-        $this->assertStringContainsString('#[VersionAware', $display);
+        $this->assertStringContainsString('version-guard errors found', $tester->getDisplay());
     }
 
-    public function testVersionAwareNamingTheGuardClearsTheError(): void
+    public function testFindingMessageIsRenderedAsAnError(): void
     {
-        $tester = $this->runValidate('GuardedWriterAcknowledged');
+        $tester = $this->runValidate('GuardedWriterUnacknowledged');
 
-        $this->assertSame(0, $tester->getStatusCode());
-        $this->assertStringContainsString('Schema is valid', $tester->getDisplay());
+        $this->assertStringContainsString(
+            '[ERROR]Class"' . self::FIXTURE_NAMESPACE . 'GuardedWriterUnacknowledged\\Writer"'
+            . 'persistsstatusguardedby#[Version]column"version"ontable"vg_guarded"'
+            . 'withoutitsown#[Version]ora#[VersionAware([\'version\'])]acknowledgement.',
+            $this->flatDisplay($tester),
+        );
     }
 
-    public function testLenientCliFlagDowngradesMissingAcknowledgementToWarning(): void
+    public function testLenientFlagDowngradesOnlyDowngradableFindingsToWarnings(): void
     {
-        $tester = $this->runValidate('GuardedWriterUnacknowledged', input: ['--lenient' => true]);
-
-        $display = preg_replace('/\s+/', ' ', $tester->getDisplay());
-        $this->assertSame(0, $tester->getStatusCode());
-        $this->assertStringContainsString('lenient mode', $display);
-        // the downgraded message body is still shown, as a warning
-        $this->assertStringContainsString('status', $display);
-        $this->assertStringContainsString('#[Version] column "version"', $display);
-    }
-
-    public function testStrictIsTheDefaultWhenNoConstructorArgumentIsGiven(): void
-    {
-        $schemaComparator = $this->createStub(DatabaseSchemaComparator::class);
-        $schemaComparator->method('compareAll')->willReturn([]);
-
-        $command = new ValidateCommand($schemaComparator, [__DIR__ . '/Fixtures/GuardedWriterUnacknowledged']);
-        $tester = new CommandTester($command);
-        $tester->execute([]);
+        $tester = $this->runValidate('RivalCounters', ['--lenient' => true]);
 
         $this->assertSame(1, $tester->getStatusCode());
-        $this->assertStringContainsString('version-guard errors found', $tester->getDisplay());
+        $display = $this->flatDisplay($tester);
+        $this->assertStringContainsString('[ERROR]Rivalcounters', $display);
+        $this->assertStringContainsString('[WARNING]Class"' . self::FIXTURE_NAMESPACE . 'RivalCounters\\StatusSlice"persists', $display);
+        $this->assertStringContainsString('[WARNING]Class"' . self::FIXTURE_NAMESPACE . 'RivalCounters\\OtherSlice"persists', $display);
+    }
+
+    public function testLenientFlagWithOnlyDowngradedFindingsPassesWithCaution(): void
+    {
+        $tester = $this->runValidate('GuardedWriterUnacknowledged', ['--lenient' => true]);
+
+        $this->assertSame(0, $tester->getStatusCode());
+        $this->assertStringContainsString('lenient mode', $tester->getDisplay());
     }
 
     public function testConstructorArgumentCanMakeLenientTheDefault(): void
@@ -81,65 +80,5 @@ class ValidateCommandVersionTest extends TestCase {
 
         $this->assertSame(0, $tester->getStatusCode());
         $this->assertStringContainsString('lenient mode', $tester->getDisplay());
-    }
-
-    public function testSiblingMappingVersionColumnAsPlainPropertyErrors(): void
-    {
-        $tester = $this->runValidate('PlainVersionColumn', input: ['--lenient' => true]);
-
-        $this->assertSame(1, $tester->getStatusCode());
-        $flat = preg_replace('/\s+/', '', $tester->getDisplay());
-        $this->assertStringContainsString('Sneaky', $flat);
-        $this->assertStringContainsString('asaplainproperty', $flat);
-        $this->assertStringNotContainsString('PlainVersionColumn\\Owner', $flat);
-    }
-
-    public function testSliceOwningItsOwnVersionOverTheColumnValidatesClean(): void
-    {
-        $tester = $this->runValidate('OwnVersionOverSameColumn');
-
-        $this->assertSame(0, $tester->getStatusCode());
-        $this->assertStringNotContainsString('#[VersionAware', $tester->getDisplay());
-    }
-
-    public function testRivalCountersErrorIsUnaffectedByLenientFlag(): void
-    {
-        $strict = $this->runValidate('RivalCounters');
-        $this->assertSame(1, $strict->getStatusCode());
-        $this->assertStringContainsString('Rival counters', $strict->getDisplay());
-
-        $lenient = $this->runValidate('RivalCounters', input: ['--lenient' => true]);
-        $this->assertSame(1, $lenient->getStatusCode());
-        $this->assertStringContainsString('Rival counters', $lenient->getDisplay());
-    }
-
-    public function testOldCoverageErrorAndMultiVersionInfoLineAreGone(): void
-    {
-        $tester = $this->runValidate('DisjointVersions');
-
-        $this->assertSame(0, $tester->getStatusCode());
-        $display = $tester->getDisplay();
-        $this->assertStringNotContainsString('does not account for version column', $display);
-        $this->assertStringNotContainsString('multiple distinct #[Version] columns', $display);
-    }
-
-    public function testGuardSetIsTheUnionOfEverySliceDeclaringThatVersionColumn(): void
-    {
-        $tester = $this->runValidate('GuardSetUnion');
-
-        $this->assertSame(1, $tester->getStatusCode());
-        $display = $tester->getDisplay();
-        $this->assertStringContainsString('col_a', $display);
-        $this->assertStringContainsString('col_b', $display);
-    }
-
-    public function testAcknowledgingOneGuardStillLeavesTheOtherChecked(): void
-    {
-        $tester = $this->runValidate('PartialAcknowledgement');
-
-        $this->assertSame(1, $tester->getStatusCode());
-        $display = $tester->getDisplay();
-        $this->assertStringContainsString('price_version', $display);
-        $this->assertStringNotContainsString('#[Version] column "status_version"', $display);
     }
 }

@@ -793,42 +793,6 @@ class QueryExecutorTest extends TestCase {
         $this->assertNull($result);
     }
 
-    public function testDeferredVersionReconciliationReturnsNullForEmptyOriginalValues(): void
-    {
-        $metadata = new EntityMetadata(QueryExecutorTestEntity::class);
-        $entity = new QueryExecutorTestEntity();
-        $entity->id = 1;
-
-        $result = $this->queryExecutor->deferredVersionReconciliation($metadata, $entity, []);
-
-        $this->assertNull($result);
-    }
-
-    public function testDeferredVersionReconciliationReturnsBumpForNonEmptyOriginalValues(): void
-    {
-        $metadata = new EntityMetadata(QueryExecutorTestEntity::class);
-        $entity = new QueryExecutorTestEntity();
-        $entity->id = 1;
-
-        $result = $this->queryExecutor->deferredVersionReconciliation($metadata, $entity, ['id' => 1]);
-
-        $this->assertNotNull($result);
-    }
-
-    public function testGetVersionColumnValueUsesNullSafeCallWhenPropertyIsMissing(): void
-    {
-        $metadata = new EntityMetadata(QueryExecutorTestEntity::class);
-        $entity = new QueryExecutorTestEntity();
-        $entity->id = 1;
-
-        // Column that maps to no known property name — the real code's
-        // nullsafe `$property?->getValue($entity)` must return null rather
-        // than throwing (mutant removes the nullsafe operator).
-        $result = $this->queryExecutor->getVersionColumnValue($metadata, $entity, 'nonexistent_column');
-
-        $this->assertNull($result);
-    }
-
     public function testExecuteInsertWritesMorphToTypeAndIdColumnsWhenRelatedEntitySet(): void
     {
         $target = new QueryExecutorMorphTarget();
@@ -1160,32 +1124,6 @@ class QueryExecutorTest extends TestCase {
 
         $this->assertStringContainsString('name = ?', $capturedSql);
         $this->assertSame(['Updated Name', 1], $capturedValues);
-    }
-
-    /**
-     * Kills the NullSafeMethodCall mutant on line 363 (`$property?->setValue`
-     * → `$property->setValue`, inside setVersionColumnValue()). When the
-     * column maps to no known property, the real nullsafe call is a no-op;
-     * the mutant would call `setValue()` on null and fatal with an Error.
-     * setVersionColumnValue() is private, invoked indirectly via
-     * deferredVersionReconciliation()'s returned closure (apply()).
-     */
-    public function testDeferredVersionReconciliationApplyToleratesUnmappedVersionColumn(): void
-    {
-        $metadata = new EntityMetadata(QueryExecutorTestEntity::class);
-        $entity = new QueryExecutorTestEntity();
-        $entity->id = 1;
-
-        $bump = $this->queryExecutor->deferredVersionReconciliation(
-            $metadata,
-            $entity,
-            ['nonexistent_version_column' => 5]
-        );
-
-        $this->assertNotNull($bump);
-        // Must not throw — the nullsafe operator makes this a no-op.
-        $bump->apply();
-        $this->assertTrue(true);
     }
 
     /**

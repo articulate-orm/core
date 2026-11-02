@@ -104,7 +104,7 @@ class EntityManager {
         $this->filters = new FilterCollection();
         $this->cacheCoordinator = new EntityCacheCoordinator($resultCache, $this->metadataRegistry, $secondLevelCache, $secondLevelCacheTtl);
         $this->dependencySorter = new EntityDependencySorter($this->metadataRegistry);
-        $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->metadataRegistry, $this->dependencySorter);
+        $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->dependencySorter, $this->metadataRegistry);
         $this->readService = new EntityReadService(
             $this->connection,
             $this->hydrator,
@@ -145,8 +145,8 @@ class EntityManager {
             $this->connection->beginTransaction();
         }
 
-        /** @var list<DeferredVersionBump> $deferredVersionBumps */
-        $deferredVersionBumps = [];
+        /** @var list<VersionedRowWriteHandle> $versionedRowWrites */
+        $versionedRowWrites = [];
 
         try {
             $unitOfWorks = $this->unitOfWorkRegistry->all();
@@ -157,17 +157,15 @@ class EntityManager {
             }
 
             $aggregatedChanges = $this->changeAggregator->aggregateChanges($unitOfWorks);
-            $deferredVersionBumps = $this->changeSetExecutor->execute($aggregatedChanges);
+            $versionedRowWrites = $this->changeSetExecutor->execute($aggregatedChanges);
             $this->changeSetExecutor->syncManagedManyToMany($unitOfWorks);
             $this->cacheCoordinator->invalidateSecondLevelCache($aggregatedChanges);
             $this->cacheCoordinator->incrementQueryCacheGeneration();
 
-            // Bump the in-memory #[Version] properties before post-update callbacks so a
-            // #[PostUpdate] handler sees the value the row now carries. The catch block
-            // reverts them if the flush never commits, so a mid-flush conflict still
-            // can't strand a stale version and poison later retries.
-            foreach ($deferredVersionBumps as $bump) {
-                $bump->apply();
+            // Committed before post-update callbacks so #[PostUpdate] sees the value the row now
+            // carries; the catch block abandons them so a failed flush leaves the pre-flush version.
+            foreach ($versionedRowWrites as $write) {
+                $write->commit();
             }
 
             foreach ($unitOfWorks as $unitOfWork) {
@@ -182,8 +180,8 @@ class EntityManager {
                 $unitOfWork->clearChanges();
             }
         } catch (\Throwable $e) {
-            foreach ($deferredVersionBumps as $bump) {
-                $bump->revert();
+            foreach ($versionedRowWrites as $write) {
+                $write->abandon();
             }
 
             if ($managingTransaction) {

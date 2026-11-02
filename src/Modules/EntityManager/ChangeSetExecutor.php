@@ -7,14 +7,14 @@ use Articulate\Schema\EntityMetadataRegistry;
 class ChangeSetExecutor {
     public function __construct(
         private readonly QueryExecutor $queryExecutor,
-        private readonly EntityMetadataRegistry $metadataRegistry,
         private readonly EntityDependencySorter $dependencySorter,
+        private readonly EntityMetadataRegistry $metadataRegistry,
     ) {
     }
 
     /**
      * @param array{inserts: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
-     * @return list<DeferredVersionBump> In-memory #[Version] reconciliations; see EntityManager::flush().
+     * @return list<VersionedRowWriteHandle> see EntityManager::flush()
      */
     public function execute(array $changes): array
     {
@@ -27,7 +27,7 @@ class ChangeSetExecutor {
             $this->queryExecutor->syncManyToMany($entity);
         }
 
-        $deferredVersionBumps = [];
+        $handles = [];
 
         $updatedEntities = [];
         foreach ($changes['updates'] as $update) {
@@ -42,9 +42,9 @@ class ChangeSetExecutor {
                 continue;
             }
 
-            $bump = $this->queryExecutor->executeUpdate($update->entity, $update->changes);
-            if ($bump !== null) {
-                $deferredVersionBumps[] = $bump;
+            $handle = $this->queryExecutor->executeUpdate($update->entity, $update->changes);
+            if ($handle !== null) {
+                $handles[] = $handle;
             }
             $updatedEntities[] = $update->entity;
         }
@@ -60,13 +60,13 @@ class ChangeSetExecutor {
         }
 
         foreach ($changes['softDeletes'] as $entity) {
-            $bump = $this->executeSoftDelete($entity);
-            if ($bump !== null) {
-                $deferredVersionBumps[] = $bump;
+            $handle = $this->queryExecutor->executeSoftDelete($entity, $this->metadataRegistry->getMetadata($entity::class));
+            if ($handle !== null) {
+                $handles[] = $handle;
             }
         }
 
-        return $deferredVersionBumps;
+        return $handles;
     }
 
     /**
@@ -79,36 +79,5 @@ class ChangeSetExecutor {
                 $this->queryExecutor->syncManyToMany($entity, dirtyOnly: true);
             }
         }
-    }
-
-    /**
-     * @return DeferredVersionBump|null In-memory #[Version] reconciliation; see EntityManager::flush().
-     */
-    private function executeSoftDelete(object $entity): ?DeferredVersionBump
-    {
-        $metadata = $this->metadataRegistry->getMetadata($entity::class);
-        $softDeleteColumn = $metadata->getSoftDeleteColumn();
-
-        if ($softDeleteColumn === null) {
-            return null;
-        }
-
-        $where = $this->queryExecutor->buildEntityWhereClause($entity);
-
-        $versionCheckColumns = [];
-        foreach ($metadata->getVersionColumns() as $checkedColumn) {
-            $versionCheckColumns[$checkedColumn] = $this->queryExecutor->getVersionColumnValue($metadata, $entity, $checkedColumn);
-        }
-
-        $this->queryExecutor->executeUpdateByTable(
-            $metadata->getTableName(),
-            [$softDeleteColumn => (new \DateTimeImmutable())->format('Y-m-d H:i:s')],
-            $where['clause'],
-            $where['values'],
-            $metadata->getVersionColumns(),
-            $versionCheckColumns,
-        );
-
-        return $this->queryExecutor->deferredVersionReconciliation($metadata, $entity, $versionCheckColumns);
     }
 }

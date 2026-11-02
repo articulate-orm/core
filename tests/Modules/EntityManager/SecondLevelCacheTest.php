@@ -5,6 +5,7 @@ namespace Articulate\Tests\Modules\EntityManager;
 use Articulate\Attributes\Entity;
 use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Property;
+use Articulate\Attributes\SoftDeleteable;
 use Articulate\Connection;
 use Articulate\Modules\EntityManager\EntityManager;
 use Articulate\Modules\EntityManager\SecondLevelCache;
@@ -146,6 +147,28 @@ class L2CacheUser {
 
 #[Entity(tableName: 'l2_cache_users')]
 class L2CacheUserSummary {
+    #[PrimaryKey]
+    public ?int $id = null;
+
+    #[Property]
+    public string $name;
+}
+
+#[Entity(tableName: 'l2_cache_soft_users')]
+#[SoftDeleteable]
+class L2CacheSoftUser {
+    #[PrimaryKey]
+    public ?int $id = null;
+
+    #[Property]
+    public string $name;
+
+    #[Property(nullable: true)]
+    public ?\DateTimeImmutable $deletedAt = null;
+}
+
+#[Entity(tableName: 'l2_cache_soft_users')]
+class L2CacheSoftUserSummary {
     #[PrimaryKey]
     public ?int $id = null;
 
@@ -414,6 +437,38 @@ class SecondLevelCacheTest extends DatabaseTestCase {
         $l2 = new SecondLevelCache($cache);
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUser::class, $id)), 'L2CacheUser cache entry should be evicted');
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUserSummary::class, $id)), 'L2CacheUserSummary cache entry should be evicted alongside sibling');
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testCacheInvalidatedForSiblingClassOnSoftDelete(string $databaseName): void
+    {
+        $this->setCurrentDatabase($this->getConnection($databaseName), $databaseName);
+        $connection = $this->getCurrentConnection();
+        $connection->executeQuery('DROP TABLE IF EXISTS l2_cache_soft_users');
+        $connection->executeQuery(match ($databaseName) {
+            'pgsql' => 'CREATE TABLE l2_cache_soft_users (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, deleted_at TIMESTAMP NULL)',
+            default => 'CREATE TABLE l2_cache_soft_users (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255) NOT NULL, deleted_at DATETIME NULL)',
+        });
+
+        $connection->executeQuery("INSERT INTO l2_cache_soft_users (name) VALUES ('Jon')");
+        $id = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'l2_cache_soft_users_id_seq' : null);
+
+        $cache = new L2ArrayCache();
+        $em = new EntityManager($connection, secondLevelCache: $cache);
+
+        $em->find(L2CacheSoftUser::class, $id);
+        $em->clear();
+        $em->find(L2CacheSoftUserSummary::class, $id);
+        $em->clear();
+
+        $user = $em->find(L2CacheSoftUser::class, $id);
+        $em->remove($user);
+        $em->flush();
+        $em->clear();
+
+        $l2 = new SecondLevelCache($cache);
+        $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheSoftUser::class, $id)));
+        $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheSoftUserSummary::class, $id)), 'sibling entry should be evicted on soft-delete');
     }
 
     #[DataProvider('databaseProvider')]

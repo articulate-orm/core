@@ -91,6 +91,13 @@ class SpyCollectionCache implements CollectionCacheInterface {
         $this->addToReverseIndexCalls[] = ['table' => $tableName, 'id' => $id, 'cacheKey' => $cacheKey, 'ttl' => $ttl];
     }
 
+    public function addIdsToReverseIndex(string $tableName, array $ids, string $cacheKey, int $ttl): void
+    {
+        foreach ($ids as $id) {
+            $this->addToReverseIndex($tableName, $id, $cacheKey, $ttl);
+        }
+    }
+
     public function getReverseIndexCacheKeys(string $tableName, mixed $id): ?array
     {
         $this->getReverseIndexCacheKeysCalls[] = ['table' => $tableName, 'id' => $id];
@@ -103,9 +110,9 @@ class SpyCollectionCache implements CollectionCacheInterface {
         $this->evictReverseIndexCalls[] = ['table' => $tableName, 'id' => $id];
     }
 
-    public function findMissingReverseIndexIds(string $tableName, array $ids): array
+    public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array
     {
-        $this->findMissingReverseIndexIdsCalls[] = ['table' => $tableName, 'ids' => $ids];
+        $this->findMissingReverseIndexIdsCalls[] = ['table' => $tableName, 'ids' => $ids, 'cacheKey' => $cacheKey];
 
         return $this->missingReverseIndexIdsToReturn;
     }

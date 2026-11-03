@@ -40,6 +40,14 @@ interface CollectionCacheInterface {
     public function addToReverseIndex(string $tableName, mixed $id, string $cacheKey, int $ttl): void;
 
     /**
+     * Batched form of addToReverseIndex() for every id of one cached list:
+     * one read, one commit and one verification round trip instead of per id.
+     *
+     * @param list<mixed> $ids
+     */
+    public function addIdsToReverseIndex(string $tableName, array $ids, string $cacheKey, int $ttl): void;
+
+    /**
      * @return list<string>|null null when no reverse-index entry exists for this row
      */
     public function getReverseIndexCacheKeys(string $tableName, mixed $id): ?array;
@@ -51,10 +59,12 @@ interface CollectionCacheInterface {
      * cross-validation protocol: given every id a cached list claims to
      * contain, return the subset of ids whose reverse-index entry is
      * missing (either never written or evicted early by the PSR-6 backend).
-     * An empty array means every id's reverse-index entry is intact.
+     * When $cacheKey is given, an entry that exists but does not name that
+     * list's key (lost update, pre-existing payload format) counts as missing
+     * too. An empty array means every id's reverse-index entry is intact.
      *
      * @param list<mixed> $ids
      * @return list<mixed>
      */
-    public function findMissingReverseIndexIds(string $tableName, array $ids): array;
+    public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array;
 }

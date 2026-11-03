@@ -438,6 +438,7 @@ class CollectionCacheTest extends TestCase {
         $cache->addToReverseIndex('products', 1, 'short', 60);
 
         $item = $pool->items['l2qidx_' . hash('sha256', "\0products:i:1")];
+        $this->assertInstanceOf(CacheItem::class, $item);
         $this->assertSame(3600 + CollectionCache::REVERSE_INDEX_GRACE_SECONDS, $item->expiresAfterSeconds);
         $this->assertSame(['long', 'short'], $cache->getReverseIndexCacheKeys('products', 1));
     }
@@ -594,5 +595,51 @@ class CollectionCacheTest extends TestCase {
         $cache = new CollectionCache(new FailingCachePool());
 
         $this->assertSame([1, 2], $cache->findMissingReverseIndexIds('products', [1, 2]));
+    }
+
+    public function testAddIdsToReverseIndexIsBatchedPerListNotPerId(): void
+    {
+        $pool = new BatchCountingCachePool();
+        $cache = new CollectionCache($pool);
+
+        $cache->addIdsToReverseIndex('products', range(1, 50), 'cache-key-a', 60);
+
+        $this->assertSame(2, $pool->getItemsCallCount, 'One batched read plus one batched verification read for the whole list.');
+        $this->assertSame(0, $pool->getItemCallCount);
+        foreach (range(1, 50) as $id) {
+            $this->assertSame(['cache-key-a'], $cache->getReverseIndexCacheKeys('products', $id));
+        }
+    }
+
+    public function testNumericStringCacheKeysSurviveTheRoundTrip(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, '123', 60);
+
+        $this->assertSame(['123'], $cache->getReverseIndexCacheKeys('products', 1));
+        $this->assertSame([], $cache->findMissingReverseIndexIds('products', [1], '123'));
+    }
+
+    public function testFindMissingReportsAnEntryThatDoesNotNameTheListKey(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $cache->addToReverseIndex('products', 1, 'list-a', 60);
+        $cache->addToReverseIndex('products', 2, 'list-b', 60);
+
+        $this->assertSame([2], $cache->findMissingReverseIndexIds('products', [1, 2], 'list-a'));
+        $this->assertSame([], $cache->findMissingReverseIndexIds('products', [1, 2]), 'Without a cache key only existence is checked.');
+    }
+
+    public function testPreMapPayloadFormatCountsAsMissingForCrossValidation(): void
+    {
+        $pool = new ArrayCachePool();
+        $cache = new CollectionCache($pool);
+        $legacy = new CacheItem('l2qidx_' . hash('sha256', "\0products:i:1"));
+        $legacy->set(['list-a']);
+        $pool->items[$legacy->getKey()] = $legacy;
+
+        $this->assertSame([1], $cache->findMissingReverseIndexIds('products', [1], 'list-a'));
     }
 }

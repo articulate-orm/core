@@ -25,6 +25,10 @@ class NullCollectionCache implements CollectionCacheInterface {
     {
     }
 
+    public function addIdsToReverseIndex(string $tableName, array $ids, string $cacheKey, int $ttl): void
+    {
+    }
+
     public function getReverseIndexCacheKeys(string $tableName, mixed $id): ?array
     {
         return null;
@@ -34,7 +38,7 @@ class NullCollectionCache implements CollectionCacheInterface {
     {
     }
 
-    public function findMissingReverseIndexIds(string $tableName, array $ids): array
+    public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array
     {
         return [];
     }

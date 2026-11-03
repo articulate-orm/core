@@ -69,26 +69,38 @@ class CollectionCache implements CollectionCacheInterface {
 
     public function addToReverseIndex(string $tableName, mixed $id, string $cacheKey, int $ttl): void
     {
+        $this->addIdsToReverseIndex($tableName, [$id], $cacheKey, $ttl);
+    }
+
+    public function addIdsToReverseIndex(string $tableName, array $ids, string $cacheKey, int $ttl): void
+    {
         try {
-            $key = $this->reverseIndexKey($tableName, $id);
-            $now = time();
+            $pending = [];
+            foreach ($ids as $id) {
+                $pending[$this->reverseIndexKey($tableName, $id)] = true;
+            }
 
             // PSR-6 has no atomic append, so concurrent writers can overwrite each
-            // other's read-modify-write. Re-read after saving and retry (bounded) if
-            // our entry was lost; the residual window is documented in ADR-0002.
-            for ($attempt = 0; $attempt < self::ADD_ATTEMPTS; $attempt++) {
-                $item = $this->pool->getItem($key);
-                $entries = $this->liveEntries($item->isHit() ? $item->get() : null, $now);
-                $entries[$cacheKey] = max($entries[$cacheKey] ?? 0, $now + $ttl);
+            // other's read-modify-write. Each round is batched (one getItems, one
+            // commit, one verification read); only keys whose entry was lost are
+            // retried. The residual window is documented in ADR-0002.
+            for ($attempt = 0; $attempt < self::ADD_ATTEMPTS && $pending !== []; $attempt++) {
+                $now = time();
+                foreach ($this->pool->getItems(array_keys($pending)) as $key => $item) {
+                    $entries = $this->liveEntries($item->isHit() ? $item->get() : null, $now);
+                    $entries[$cacheKey] = max($entries[$cacheKey] ?? 0, $now + $ttl);
 
-                // Lifetime follows the longest-lived query entry the row is part of, so a
-                // short-TTL query can never shorten the index protecting a long-TTL one.
-                $item->set($entries)->expiresAfter(max($entries) - $now + self::REVERSE_INDEX_GRACE_SECONDS);
-                $this->pool->save($item);
+                    // Lifetime follows the longest-lived query entry the row is part of, so a
+                    // short-TTL query can never shorten the index protecting a long-TTL one.
+                    $item->set($entries)->expiresAfter(max($entries) - $now + self::REVERSE_INDEX_GRACE_SECONDS);
+                    $this->pool->saveDeferred($item);
+                }
+                $this->pool->commit();
 
-                $check = $this->pool->getItem($key);
-                if ($check->isHit() && isset($this->liveEntries($check->get(), $now)[$cacheKey])) {
-                    return;
+                foreach ($this->pool->getItems(array_keys($pending)) as $key => $item) {
+                    if ($item->isHit() && isset($this->liveEntries($item->get(), $now)[$cacheKey])) {
+                        unset($pending[$key]);
+                    }
                 }
             }
         } catch (\Throwable) {
@@ -105,7 +117,7 @@ class CollectionCache implements CollectionCacheInterface {
             }
 
             // Expired query entries are kept out of the result; evicting them is a no-op anyway.
-            return array_keys($this->liveEntries($item->get(), time()));
+            return array_map('strval', array_keys($this->liveEntries($item->get(), time())));
         } catch (\Throwable) {
             return null;
         }
@@ -120,7 +132,7 @@ class CollectionCache implements CollectionCacheInterface {
         }
     }
 
-    public function findMissingReverseIndexIds(string $tableName, array $ids): array
+    public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array
     {
         if (empty($ids)) {
             return [];
@@ -136,7 +148,8 @@ class CollectionCache implements CollectionCacheInterface {
 
             $missing = [];
             foreach ($items as $key => $item) {
-                if (!$item->isHit()) {
+                // Missing, or present but no longer naming this list (lost update / old payload format).
+                if (!$item->isHit() || ($cacheKey !== null && !isset($this->liveEntries($item->get(), time())[$cacheKey]))) {
                     $missing[] = $keyToId[$key];
                 }
             }
@@ -168,8 +181,8 @@ class CollectionCache implements CollectionCacheInterface {
 
         $live = [];
         foreach ($stored as $cacheKey => $expiresAt) {
-            if (is_string($cacheKey) && is_int($expiresAt) && $expiresAt > $now) {
-                $live[$cacheKey] = $expiresAt;
+            if (is_int($expiresAt) && $expiresAt > $now) {
+                $live[(string) $cacheKey] = $expiresAt;
             }
         }
 

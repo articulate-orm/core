@@ -78,9 +78,7 @@ class QueryResultSecondLevelCache {
         $ttl = $this->ttl ?? $defaultTtl;
         $this->collectionCache->setIdList($key, $ids, $ttl);
 
-        foreach ($ids as $id) {
-            $this->collectionCache->addToReverseIndex($tableName, $id, $key, $ttl);
-        }
+        $this->collectionCache->addIdsToReverseIndex($tableName, $ids, $key, $ttl);
     }
 
     /**
@@ -105,7 +103,7 @@ class QueryResultSecondLevelCache {
             return null;
         }
 
-        $missing = $this->collectionCache->findMissingReverseIndexIds($tableName, $ids);
+        $missing = $this->collectionCache->findMissingReverseIndexIds($tableName, $ids, $key);
         if (!empty($missing)) {
             return null;
         }

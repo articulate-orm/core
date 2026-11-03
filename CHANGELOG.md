@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second-level cache. The matched id-list is cached; entities resolve from the identity map or the
   per-entity second-level cache, and any unresolvable id discards the whole cached list and re-queries.
   Silent no-op without a configured `secondLevelCache` pool, for `lock()` queries, aggregates,
-  custom hydrators and composite primary keys. See `docs/adr/0002`.
+  custom hydrators and composite primary keys. See `docs-site/src/content/docs/reference/adr-0002-collection-second-level-cache.md`.
 - Second-level cache keys (collection and per-entity) are now namespaced per connection
   (`Connection::getCacheNamespace()`), so connections to different databases can share one pool
   safely. Existing per-entity entries are not reused after upgrading.

@@ -83,6 +83,13 @@ class EntityCacheCoordinatorSpyCollectionCache implements CollectionCacheInterfa
         $this->reverseIndex[$tableName . ':' . $id][] = $cacheKey;
     }
 
+    public function addIdsToReverseIndex(string $tableName, array $ids, string $cacheKey, int $ttl): void
+    {
+        foreach ($ids as $id) {
+            $this->addToReverseIndex($tableName, $id, $cacheKey, $ttl);
+        }
+    }
+
     public function getReverseIndexCacheKeys(string $tableName, mixed $id): ?array
     {
         return $this->reverseIndex[$tableName . ':' . $id] ?? null;
@@ -94,7 +101,7 @@ class EntityCacheCoordinatorSpyCollectionCache implements CollectionCacheInterfa
         unset($this->reverseIndex[$tableName . ':' . $id]);
     }
 
-    public function findMissingReverseIndexIds(string $tableName, array $ids): array
+    public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array
     {
         return [];
     }

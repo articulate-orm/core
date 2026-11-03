@@ -477,9 +477,9 @@ class QueryBuilderCacheableTest extends DatabaseTestCase {
 
         $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
 
-        $this->assertSame(3, $cache->saveDeferredCalls, 'Entity rows are queued, one per row.');
-        $this->assertSame(1, $cache->commitCalls, 'and flushed with a single commit.');
-        $this->assertSame(1 + 3, $cache->saveCalls, 'The id-list plus one reverse-index entry per id are saved individually.');
+        $this->assertSame(3 + 3, $cache->saveDeferredCalls, 'Entity rows and reverse-index entries are queued, one per row.');
+        $this->assertSame(2, $cache->commitCalls, 'one commit for the entity rows, one for the whole reverse index.');
+        $this->assertSame(1, $cache->saveCalls, 'Only the id-list is saved individually.');
 
         $em->clear();
         $getItemBefore = $cache->getItemCalls;

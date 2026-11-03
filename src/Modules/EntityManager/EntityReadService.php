@@ -3,9 +3,7 @@
 namespace Articulate\Modules\EntityManager;
 
 use Articulate\Connection;
-use Articulate\Modules\Cache\CollectionCache;
 use Articulate\Modules\Cache\CollectionCacheInterface;
-use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Modules\QueryBuilder\Filter\FilterCollection;
 use Articulate\Modules\QueryBuilder\QueryBuilder;
 use Articulate\Schema\CachedEntityResolverInterface;
@@ -26,7 +24,6 @@ class EntityReadService implements CachedEntityResolverInterface {
         private readonly ?CacheItemPoolInterface $resultCache,
         private readonly ?CacheItemPoolInterface $statementCache,
         private ?Proxy\ProxyManager $proxyManager,
-        private readonly ?CacheItemPoolInterface $secondLevelCache = null,
         private readonly int $secondLevelCacheTtl = CollectionCacheInterface::DEFAULT_TTL,
     ) {
     }
@@ -129,9 +126,7 @@ class EntityReadService implements CachedEntityResolverInterface {
 
     public function createQueryBuilder(?string $entityClass = null): QueryBuilder
     {
-        $collectionCache = $this->secondLevelCache !== null
-            ? new CollectionCache($this->secondLevelCache)
-            : new NullCollectionCache();
+        $collectionCache = $this->cacheCoordinator->getCollectionCache();
 
         $qb = new QueryBuilder(
             $this->connection,

@@ -42,7 +42,7 @@ Two different change shapes get two different mechanisms, not one blunt "evict e
 table" hammer:
 
 **(a) An already-cached row changed or was deleted — exact invalidation.** When a query's id-list is
-cached, also write reverse-index entries keyed `tableName:normalizedId -> [cacheKey, ...]` — **table-
+cached, also write reverse-index entries keyed by a hash of `namespace, NUL, tableName, normalizedId`, holding `cacheKey => expiry` — **table-
 scoped, not globally keyed by raw id alone.** `EntityCacheCoordinator` already walks every
 changed/deleted/soft-deleted entity in `invalidateSecondLevelCache($aggregatedChanges)` — extend that
 loop to resolve the entity's table (same `getTableName()` call `evictEntityFromSecondLevelCache()`
@@ -67,7 +67,7 @@ same mechanism `EntityCacheCoordinator::incrementQueryCacheGeneration()` already
 table instead of one global counter). An INSERT recorded in `$aggregatedChanges` for a table bumps that
 table's counter; old keys stop matching and age out via TTL, no explicit sweep needed.
 
-**Reverse-index TTL** is set to the query-cache entry's TTL **plus a fixed grace buffer** (e.g. +300s),
+**Reverse-index TTL** is set to the query-cache entry's TTL **plus a fixed grace buffer** (`REVERSE_INDEX_GRACE_SECONDS`, 300s),
 so the index always outlives the entry it points at — a stale/orphaned reverse-index entry is harmless
 (it just points at an already-expired key, a clean miss).
 
@@ -108,8 +108,8 @@ invalidation alone cannot.
    path rather than assuming nothing is cached (already-existing `QueryResultExecutor` behavior, not
    new).
 
-This fully closes the previously-unfixable update-case gap: if a flush-time invalidation silently
-missed evicting a query-cache entry because its reverse-index was already gone, that same absence is
+This closes the previously-unfixable *eviction* gap for rows that were in a cached list: if a flush-time
+invalidation silently missed evicting a query-cache entry because its reverse-index was already gone, that same absence is
 observed on the very next read and triggers outcome 2 — stale data is never served past that point. The
 accepted cost is explicit: every cache hit now pays one additional batched reverse-index existence
 check alongside the id resolution it already performs. A false positive (reverse-index evicted for an
@@ -122,14 +122,43 @@ entity that turns out to have been deleted (null resolution) drops that id from 
 without discarding the whole list — a narrower, cheaper complement to outcome 2 for the pure-deletion
 case, costing nothing beyond the hydration lookup already being performed.
 
+**Reverse-index payload and concurrency.** Each reverse-index entry stores `cacheKey => expiry epoch` for
+every query entry referencing the row; its own TTL is `max(expiry) - now + grace`, so a short-TTL query
+can never shorten the index protecting a long-TTL one. PSR-6 has no atomic append, so `addToReverseIndex`
+re-reads after saving and retries (bounded) if a concurrent writer overwrote its key. A residual race
+remains possible and is accepted: the lost key is a query entry that would then miss exact eviction until
+its TTL. Likewise a backend exception while looking up the reverse index at flush time is fail-open
+(nothing evicted) because the failure is indistinguishable from "never referenced"; read-time
+cross-validation cannot catch it once the backend recovers.
+
+**Cross-validation also checks membership.** The read-time check passes `$cacheKey` so an index entry that
+exists but no longer names the list (lost concurrent update, pre-map payload format) counts as missing and
+triggers outcome 2. This turns the lost-update race above into a self-healing requery on the next read.
+
+**Known limits (accepted, documented):**
+- *Update into a predicate.* An UPDATE that makes a row newly match a cached query's WHERE clause is not
+  detected — the row's id is not in the cached list, so no reverse-index entry exists. Like inserts (b),
+  such queries stay stale until their TTL (the per-table generation counter of the insert-invalidation
+  ticket is the intended mechanism to cover this too).
+- *Joined/related tables.* A cached query's list is indexed only against its own root table; a change to a
+  table it merely joins or filters through does not invalidate it.
+- *Bulk paths.* `QueryBuilder::update()`/`delete()` called with a table string execute SQL directly and
+  bypass `$aggregatedChanges`, so they do not evict reverse-indexed entries. "Everything routes through
+  `$aggregatedChanges`" holds for UnitOfWork flushes only.
+- *Pre-commit eviction.* Eviction runs inside the flush transaction, before COMMIT. Another process can
+  re-cache the pre-commit row after the eviction and before the commit; that list stays stale until its
+  TTL. The per-entity L2 eviction has the same property.
+
 ### Module placement
 
 New `src/Modules/Cache/` module holds only the new code: `CollectionCacheInterface` +
 `CollectionCache` (PSR-6-backed storage for id-lists and reverse-index entries, key prefixes `l2q_`/
 `l2qidx_` (PSR-6 reserves `:`), distinct from `SecondLevelCache::generateKey()`'s plain per-entity hash) and
 `NullCollectionCache` (no-op Null Object, always miss). The existing `SecondLevelCache`/
-`EntityCacheCoordinator` in `EntityManager` are untouched — zero breaking change to that public
-namespace. `EntityCacheCoordinator` gains a dependency on the new `Cache` module to drive reverse-index
+`EntityCacheCoordinator` in `EntityManager` stay in place (zero breaking change to that public
+namespace). They gain only thin wiring: `SecondLevelCache` delegates id normalization to the shared
+`Cache\IdNormalizer`, and `EntityCacheCoordinator` owns the single `CollectionCacheInterface` instance
+that `EntityReadService` also hands to `QueryBuilder`. `EntityCacheCoordinator` gains a dependency on the new `Cache` module to drive reverse-index
 eviction and generation bumps at flush time.
 
 This is a narrower module than folding the existing per-entity L2 cache into the same place would be;

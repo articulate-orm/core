@@ -24,7 +24,6 @@ class EntityReadService implements CachedEntityResolverInterface {
         private readonly ?CacheItemPoolInterface $resultCache,
         private readonly ?CacheItemPoolInterface $statementCache,
         private ?Proxy\ProxyManager $proxyManager,
-        ?CacheItemPoolInterface $secondLevelCache = null,
         private readonly int $secondLevelCacheTtl = CollectionCacheInterface::DEFAULT_TTL,
     ) {
     }

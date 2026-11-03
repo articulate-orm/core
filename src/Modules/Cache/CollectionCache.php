@@ -76,7 +76,7 @@ class CollectionCache implements CollectionCacheInterface {
             // PSR-6 has no atomic append, so concurrent writers can overwrite each
             // other's read-modify-write. Re-read after saving and retry (bounded) if
             // our entry was lost; the residual window is documented in ADR-0002.
-            for ($attempt = 0; $attempt < self::ADD_ATTEMPTS; ++$attempt) {
+            for ($attempt = 0; $attempt < self::ADD_ATTEMPTS; $attempt++) {
                 $item = $this->pool->getItem($key);
                 $entries = $this->liveEntries($item->isHit() ? $item->get() : null, $now);
                 $entries[$cacheKey] = max($entries[$cacheKey] ?? 0, $now + $ttl);

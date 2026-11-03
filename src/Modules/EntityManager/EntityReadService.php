@@ -3,9 +3,7 @@
 namespace Articulate\Modules\EntityManager;
 
 use Articulate\Connection;
-use Articulate\Modules\Cache\CollectionCache;
 use Articulate\Modules\Cache\CollectionCacheInterface;
-use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Modules\QueryBuilder\Filter\FilterCollection;
 use Articulate\Modules\QueryBuilder\QueryBuilder;
 use Articulate\Schema\CachedEntityResolverInterface;

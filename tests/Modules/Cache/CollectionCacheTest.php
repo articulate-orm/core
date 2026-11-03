@@ -444,7 +444,7 @@ class CollectionCacheTest extends TestCase {
 
     public function testAddToReverseIndexRetriesWhenAConcurrentWriterOverwroteTheEntry(): void
     {
-        $pool = new class extends ArrayCachePool {
+        $pool = new class() extends ArrayCachePool {
             private bool $raced = false;
 
             public function save(CacheItemInterface $item): bool

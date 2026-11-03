@@ -129,9 +129,7 @@ class EntityReadService implements CachedEntityResolverInterface {
 
     public function createQueryBuilder(?string $entityClass = null): QueryBuilder
     {
-        $collectionCache = $this->secondLevelCache !== null
-            ? new CollectionCache($this->secondLevelCache, $this->connection->getCacheNamespace())
-            : new NullCollectionCache();
+        $collectionCache = $this->cacheCoordinator->getCollectionCache();
 
         $qb = new QueryBuilder(
             $this->connection,

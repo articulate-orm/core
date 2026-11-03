@@ -415,7 +415,7 @@ class QueryBuilderCacheableInvalidationTest extends DatabaseTestCase {
         $em->createQueryBuilder(QbInvProduct::class)->orderBy('id')->cacheable($queryTtl)->getResult();
 
         $tableName = 'qb_inv_products';
-        $reverseIndexKey = 'l2qidx_' . hash('sha256', $connection->getCacheNamespace() . $tableName . ':i:' . $id);
+        $reverseIndexKey = 'l2qidx_' . hash('sha256', $connection->getCacheNamespace() . "\0" . $tableName . ':i:' . $id);
         $this->assertTrue($cache->hasItem($reverseIndexKey), 'Reverse-index entry must exist right after the query is cached.');
 
         // Advance the controllable clock past the query-cache TTL but still

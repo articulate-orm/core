@@ -59,6 +59,10 @@ class EntityCacheCoordinator {
      */
     public function invalidateSecondLevelCache(array $changes): void
     {
+        if ($this->secondLevelCache === null && $this->collectionCache instanceof NullCollectionCache) {
+            return;
+        }
+
         foreach ($changes['updates'] as $update) {
             if (isset($update['entity'])) {
                 $this->evictEntityFromSecondLevelCache($update['entity']);
@@ -72,6 +76,11 @@ class EntityCacheCoordinator {
         foreach ($changes['softDeletes'] as $entity) {
             $this->evictEntityFromSecondLevelCache($entity);
         }
+    }
+
+    public function getCollectionCache(): CollectionCacheInterface
+    {
+        return $this->collectionCache;
     }
 
     public function getSecondLevelCacheData(string $class, mixed $id): ?array

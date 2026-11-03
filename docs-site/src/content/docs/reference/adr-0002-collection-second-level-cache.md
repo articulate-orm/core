@@ -122,14 +122,25 @@ entity that turns out to have been deleted (null resolution) drops that id from 
 without discarding the whole list — a narrower, cheaper complement to outcome 2 for the pure-deletion
 case, costing nothing beyond the hydration lookup already being performed.
 
+**Reverse-index payload and concurrency.** Each reverse-index entry stores `cacheKey => expiry epoch` for
+every query entry referencing the row; its own TTL is `max(expiry) - now + grace`, so a short-TTL query
+can never shorten the index protecting a long-TTL one. PSR-6 has no atomic append, so `addToReverseIndex`
+re-reads after saving and retries (bounded) if a concurrent writer overwrote its key. A residual race
+remains possible and is accepted: the lost key is a query entry that would then miss exact eviction until
+its TTL. Likewise a backend exception while looking up the reverse index at flush time is fail-open
+(nothing evicted) because the failure is indistinguishable from "never referenced"; read-time
+cross-validation cannot catch it once the backend recovers.
+
 ### Module placement
 
 New `src/Modules/Cache/` module holds only the new code: `CollectionCacheInterface` +
 `CollectionCache` (PSR-6-backed storage for id-lists and reverse-index entries, key prefixes `l2q_`/
 `l2qidx_` (PSR-6 reserves `:`), distinct from `SecondLevelCache::generateKey()`'s plain per-entity hash) and
 `NullCollectionCache` (no-op Null Object, always miss). The existing `SecondLevelCache`/
-`EntityCacheCoordinator` in `EntityManager` are untouched — zero breaking change to that public
-namespace. `EntityCacheCoordinator` gains a dependency on the new `Cache` module to drive reverse-index
+`EntityCacheCoordinator` in `EntityManager` stay in place (zero breaking change to that public
+namespace); they gain only thin wiring — `SecondLevelCache` delegates id normalization to the shared
+`Cache\IdNormalizer`, and `EntityCacheCoordinator` owns the single `CollectionCacheInterface` instance
+that `EntityReadService` also hands to `QueryBuilder`. `EntityCacheCoordinator` gains a dependency on the new `Cache` module to drive reverse-index
 eviction and generation bumps at flush time.
 
 This is a narrower module than folding the existing per-entity L2 cache into the same place would be;

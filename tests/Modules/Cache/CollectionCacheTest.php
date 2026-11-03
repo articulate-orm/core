@@ -424,9 +424,60 @@ class CollectionCacheTest extends TestCase {
 
         $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
 
-        $item = $pool->items['l2qidx_' . hash('sha256', 'products:i:1')];
+        $item = $pool->items['l2qidx_' . hash('sha256', "\0products:i:1")];
         $this->assertInstanceOf(CacheItem::class, $item);
         $this->assertSame(60 + CollectionCache::REVERSE_INDEX_GRACE_SECONDS, $item->expiresAfterSeconds);
+    }
+
+    public function testShortTtlQueryNeverShortensTheIndexProtectingALongTtlQuery(): void
+    {
+        $pool = new ArrayCachePool();
+        $cache = new CollectionCache($pool);
+
+        $cache->addToReverseIndex('products', 1, 'long', 3600);
+        $cache->addToReverseIndex('products', 1, 'short', 60);
+
+        $item = $pool->items['l2qidx_' . hash('sha256', "\0products:i:1")];
+        $this->assertSame(3600 + CollectionCache::REVERSE_INDEX_GRACE_SECONDS, $item->expiresAfterSeconds);
+        $this->assertSame(['long', 'short'], $cache->getReverseIndexCacheKeys('products', 1));
+    }
+
+    public function testAddToReverseIndexRetriesWhenAConcurrentWriterOverwroteTheEntry(): void
+    {
+        $pool = new class extends ArrayCachePool {
+            private bool $raced = false;
+
+            public function save(CacheItemInterface $item): bool
+            {
+                if (!$this->raced) {
+                    $this->raced = true;
+                    // A competing request wins the read-modify-write race.
+                    $competitor = new CacheItem($item->getKey());
+                    $competitor->set(['competitor' => time() + 600]);
+                    $this->items[$item->getKey()] = $competitor;
+
+                    return true;
+                }
+
+                return parent::save($item);
+            }
+        };
+        $cache = new CollectionCache($pool);
+
+        $cache->addToReverseIndex('products', 1, 'mine', 60);
+
+        $this->assertSame(['competitor', 'mine'], $cache->getReverseIndexCacheKeys('products', 1));
+    }
+
+    public function testExpiredQueryEntriesAreDroppedFromTheReverseIndex(): void
+    {
+        $pool = new ArrayCachePool();
+        $cache = new CollectionCache($pool);
+        $item = new CacheItem('l2qidx_' . hash('sha256', "\0products:i:1"));
+        $item->set(['stale' => time() - 10, 'fresh' => time() + 100]);
+        $pool->items[$item->getKey()] = $item;
+
+        $this->assertSame(['fresh'], $cache->getReverseIndexCacheKeys('products', 1));
     }
 
     public function testReverseIndexKeysAreStoredUnderTheReverseIndexPrefix(): void
@@ -436,7 +487,7 @@ class CollectionCacheTest extends TestCase {
 
         $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
 
-        $this->assertArrayHasKey('l2qidx_' . hash('sha256', 'products:i:1'), $pool->items, 'Reverse-index entries must be namespaced under the l2qidx_ prefix.');
+        $this->assertArrayHasKey('l2qidx_' . hash('sha256', "\0products:i:1"), $pool->items, 'Reverse-index entries must be namespaced under the l2qidx_ prefix.');
     }
 
     public function testReverseIndexKeyIncludesTheNamespace(): void
@@ -446,7 +497,7 @@ class CollectionCacheTest extends TestCase {
 
         $cache->addToReverseIndex('products', 1, 'cache-key-a', 60);
 
-        $this->assertArrayHasKey('l2qidx_' . hash('sha256', 'nsproducts:i:1'), $pool->items);
+        $this->assertArrayHasKey('l2qidx_' . hash('sha256', "ns\0products:i:1"), $pool->items);
         $this->assertNull((new CollectionCache($pool, 'other'))->getReverseIndexCacheKeys('products', 1));
     }
 

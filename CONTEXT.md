@@ -46,6 +46,11 @@ see ADRs under `docs-site/src/content/docs/reference/` for the "why" behind spec
   UPDATE. The only kind of update that can carry an optimistic-lock version check.
 - **Merged update**: A single UPDATE combining the dirty columns of several sibling slices on
   the same row. Never versioned — a slice with a `#[Version]` column is never merged.
+- **Versioned row write**: An entity update (UPDATE or soft-delete) that bumps and checks its
+  slice's own `#[Version]` column; zero matched rows is a lost update. Owned by
+  `VersionedRowWrite`. Avoid: locked update, version bump.
+- **Lost update**: A versioned row write that matches no row, because the tracked version is
+  stale or the row is gone. Surfaces as `OptimisticLockException`. Avoid: lock conflict.
 
 ## Optimistic locking
 

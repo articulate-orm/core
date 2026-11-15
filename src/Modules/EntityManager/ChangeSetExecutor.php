@@ -7,8 +7,8 @@ use Articulate\Schema\EntityMetadataRegistry;
 class ChangeSetExecutor {
     public function __construct(
         private readonly QueryExecutor $queryExecutor,
-        private readonly EntityDependencySorter $dependencySorter,
         private readonly EntityMetadataRegistry $metadataRegistry,
+        private readonly EntityDependencySorter $dependencySorter,
     ) {
     }
 
@@ -42,7 +42,7 @@ class ChangeSetExecutor {
                 continue;
             }
 
-            $handle = $this->queryExecutor->executeUpdate($update->entity, $update->changes);
+            $handle = $this->queryExecutor->executeUpdate($update->entity, $update->changes, $this->metadataRegistry->getMetadata($update->entity::class));
             if ($handle !== null) {
                 $handles[] = $handle;
             }

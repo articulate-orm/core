@@ -109,7 +109,7 @@ class EntityManager {
             : new NullCollectionCache();
         $this->cacheCoordinator = new EntityCacheCoordinator($resultCache, $this->metadataRegistry, $secondLevelCache, $secondLevelCacheTtl, $this->connection->getCacheNamespace(), $collectionCache);
         $this->dependencySorter = new EntityDependencySorter($this->metadataRegistry);
-        $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->dependencySorter, $this->metadataRegistry);
+        $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->metadataRegistry, $this->dependencySorter);
         $this->readService = new EntityReadService(
             $this->connection,
             $this->hydrator,

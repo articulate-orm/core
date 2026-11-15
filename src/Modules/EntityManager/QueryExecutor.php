@@ -168,16 +168,17 @@ class QueryExecutor {
      *
      * @param object $entity The entity to update
      * @param array $changes The changed properties (fieldName => newValue)
-     * @return VersionedRowWriteHandle|null null when nothing is written; see VersionedRowWrite
+     * @param EntityMetadata|null $metadata registry-resolved metadata, so the PSR-6 metadata cache and table index are honored
+     * @return VersionedRowWriteHandle|null null when there are no changes or the slice has no #[Version] column; see VersionedRowWrite
      */
-    public function executeUpdate(object $entity, array $changes): ?VersionedRowWriteHandle
+    public function executeUpdate(object $entity, array $changes, ?EntityMetadata $metadata = null): ?VersionedRowWriteHandle
     {
         if (empty($changes)) {
             return null;
         }
 
         $reflectionEntity = $this->getReflectionEntity($entity::class);
-        $metadata = $this->entityMetadataCache[$entity::class] ??= new EntityMetadata($entity::class);
+        $metadata ??= $this->entityMetadataCache[$entity::class] ??= new EntityMetadata($entity::class);
 
         // Prepare SET clause from changes
         $setParts = [];

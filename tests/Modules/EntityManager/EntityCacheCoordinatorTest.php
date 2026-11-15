@@ -7,6 +7,7 @@ use Articulate\Attributes\Indexes\PrimaryKey;
 use Articulate\Attributes\Property;
 use Articulate\Modules\Cache\CollectionCacheInterface;
 use Articulate\Modules\EntityManager\EntityCacheCoordinator;
+use Articulate\Modules\EntityManager\EntityUpdate;
 use Articulate\Schema\EntityMetadataRegistry;
 use PHPUnit\Framework\TestCase;
 use Psr\Cache\CacheItemInterface;
@@ -323,7 +324,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [['entity' => $entity]], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys);
     }
@@ -371,7 +372,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [['entity' => $entity]], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame(['cache-key-a', 'cache-key-b'], $collectionCache->evictedIdListKeys);
     }
@@ -387,7 +388,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [['entity' => $entity]], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame([['table' => 'ecc_products', 'id' => 1]], $collectionCache->evictedReverseIndexEntries);
         $this->assertNull($collectionCache->getReverseIndexCacheKeys('ecc_products', 1));
@@ -403,7 +404,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 999;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [['entity' => $entity]], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame([], $collectionCache->evictedIdListKeys);
     }
@@ -421,7 +422,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProductSummary();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [['entity' => $entity]], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys, 'A write through a context-bounded sibling class must evict the reverse-indexed cache entry of the same table/row.');
     }
@@ -439,7 +440,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [['entity' => $entity]], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame([], $collectionCache->evictedIdListKeys, 'A write to table A must never evict a cached query belonging to an unrelated table B, even with a coincidentally-matching raw id.');
     }
@@ -454,7 +455,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity->id = 1;
 
         // Must not throw when no collection cache was ever configured.
-        $coordinator->invalidateSecondLevelCache(['updates' => [['entity' => $entity]], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
         $this->addToAssertionCount(1);
     }
 }

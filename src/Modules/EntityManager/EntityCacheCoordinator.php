@@ -55,7 +55,7 @@ class EntityCacheCoordinator {
     }
 
     /**
-     * @param array{updates: array<int, array{entity?: object}>, deletes: object[], softDeletes: object[]} $changes
+     * @param array{updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
      */
     public function invalidateSecondLevelCache(array $changes): void
     {
@@ -64,8 +64,8 @@ class EntityCacheCoordinator {
         }
 
         foreach ($changes['updates'] as $update) {
-            if (isset($update['entity'])) {
-                $this->evictEntityFromSecondLevelCache($update['entity']);
+            if ($update->entity !== null) {
+                $this->evictEntityFromSecondLevelCache($update->entity);
             }
         }
 

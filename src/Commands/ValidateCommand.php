@@ -24,7 +24,6 @@ class ValidateCommand extends Command {
         private readonly EntityClassDiscovery $entityClassDiscovery = new EntityClassDiscovery(),
         private readonly EntityMetadataRegistry $metadataRegistry = new EntityMetadataRegistry(),
         private readonly bool $lenientVersionChecks = false,
-        private readonly SliceVersionGuardCheck $sliceVersionGuardCheck = new SliceVersionGuardCheck(),
     ) {
         parent::__construct();
     }
@@ -102,7 +101,7 @@ class ValidateCommand extends Command {
 
         $errors = 0;
         $warnings = 0;
-        foreach ($this->sliceVersionGuardCheck->check(...$slices) as $finding) {
+        foreach ((new SliceVersionGuardCheck())->check(...$slices) as $finding) {
             if ($lenient && $finding->kind->downgradable()) {
                 $warnings++;
                 $io->warning($finding->message());

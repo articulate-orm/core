@@ -152,13 +152,13 @@ Each `EntityManager` owns its `IdentityMap` and `UnitOfWork` — calling `flush(
 
 ### Second-Level Cache
 
-`SecondLevelCache` (`src/Modules/EntityManager/`) caches raw entity rows keyed by `class + id` behind a PSR-6 pool. Pass `secondLevelCache:` (and optional `secondLevelCacheTtl:`) to `EntityManager`. `find()` reads through it; `flush()` evicts changed/deleted IDs. Cache faults never break query execution — every operation is wrapped and fails open.
+`SecondLevelCache` (`src/Modules/EntityManager/`) caches raw entity rows keyed by `class + id` behind a PSR-6 pool. Pass `secondLevelCache:` (and optional `secondLevelCacheTtl:`) to `EntityManager` — it is the only switch; `resultCache:` alone never enables it. `find()` reads through it; `flush()` evicts changed/deleted IDs. Cache faults never break query execution — every operation is wrapped and fails open.
 
 Contract — read before relying on it:
 - **Cross-context staleness is by design.** Eviction only happens in the `EntityManager` that performed the write. A write in context A leaves a stale row readable in context B until its TTL expires. Keep `secondLevelCacheTtl` short for entities shared across contexts, or evict explicitly. Same footgun class as the replica `flush()` rule above.
 - **Sibling-class eviction is automatic within one `EntityManager`.** When `flush()` writes or deletes a row, the cache is evicted for every entity class mapped to the same table that the registry has seen in this session (via `EntityMetadataRegistry::getClassesByTable`). Example: deleting `Customer(id=1)` also evicts the `CustomerSummary(id=1)` entry. Classes never loaded in the session are not evicted — cross-`EntityManager` staleness still applies.
 - **Caches the root row only, not relations.** A cache hit returns a shallow hydrate; relations still lazy-load on access (consistent with a cold `find()`).
-- **IDs must be scalar, `Stringable`, or a composite array.** Keys are type-tagged so `1` (int) and `"1"` (string) never collide; non-`Stringable` objects throw (caught upstream → caching silently disabled for that ID).
+- **IDs must be scalar, `Stringable`, or a composite array.** `EntityCacheCoordinator` first canonicalizes every id to the primary-key property's PHP type (same converter/cast as hydration), so `find(User::class, '1')`, a raw DB row value and the typed property used for flush eviction all hit one entry. Keys are then type-tagged, so ids of different classes/types never collide; non-`Stringable` objects throw (caught upstream → caching silently disabled for that ID).
 
 ### Collection Cache
 

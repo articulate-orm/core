@@ -6,6 +6,7 @@ use Articulate\Modules\Cache\CollectionCacheInterface;
 use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Utils\ReflectionCache;
+use Articulate\Utils\TypeRegistry;
 use Psr\Cache\CacheItemPoolInterface;
 
 class EntityCacheCoordinator {
@@ -18,10 +19,10 @@ class EntityCacheCoordinator {
         int $secondLevelCacheTtl = CollectionCacheInterface::DEFAULT_TTL,
         string $cacheNamespace = '',
         private readonly CollectionCacheInterface $collectionCache = new NullCollectionCache(),
+        private readonly TypeRegistry $typeRegistry = new TypeRegistry(),
     ) {
-        $secondLevelCachePool = $secondLevelCache ?? $resultCache;
-        if ($secondLevelCachePool !== null) {
-            $this->secondLevelCache = new SecondLevelCache($secondLevelCachePool, $secondLevelCacheTtl, $cacheNamespace);
+        if ($secondLevelCache !== null) {
+            $this->secondLevelCache = new SecondLevelCache($secondLevelCache, $secondLevelCacheTtl, $cacheNamespace);
         }
     }
 
@@ -87,12 +88,12 @@ class EntityCacheCoordinator {
 
     public function getSecondLevelCacheData(string $class, mixed $id): ?array
     {
-        return $this->secondLevelCache?->get($class, $id);
+        return $this->secondLevelCache?->get($class, $this->canonicalId($class, $id));
     }
 
     public function setSecondLevelCacheData(string $class, mixed $id, array $data): void
     {
-        $this->secondLevelCache?->set($class, $id, $data);
+        $this->secondLevelCache?->set($class, $this->canonicalId($class, $id), $data);
     }
 
     /**
@@ -101,7 +102,11 @@ class EntityCacheCoordinator {
      */
     public function getSecondLevelCacheDataMany(string $class, array $ids): array
     {
-        return $this->secondLevelCache?->getMany($class, $ids) ?? array_fill_keys(array_keys($ids), null);
+        if ($this->secondLevelCache === null) {
+            return array_fill_keys(array_keys($ids), null);
+        }
+
+        return $this->secondLevelCache->getMany($class, array_map(fn (mixed $id): mixed => $this->canonicalId($class, $id), $ids));
     }
 
     /**
@@ -109,7 +114,57 @@ class EntityCacheCoordinator {
      */
     public function setSecondLevelCacheDataMany(string $class, array $idRowPairs): void
     {
-        $this->secondLevelCache?->setMany($class, $idRowPairs);
+        $this->secondLevelCache?->setMany(
+            $class,
+            array_map(fn (array $pair): array => [$this->canonicalId($class, $pair[0]), $pair[1]], $idRowPairs),
+        );
+    }
+
+    /**
+     * Ids reach the cache in whatever form the caller holds — a route-param
+     * string for find(), a raw DB value for freshly loaded rows, the typed
+     * property for flush eviction. The type-tagged key would treat "1" and 1
+     * as different entries, so every path is first brought to the primary-key
+     * property's PHP representation, using the same conversion as hydration.
+     */
+    private function canonicalId(string $class, mixed $id): mixed
+    {
+        if (is_object($id) || is_array($id) || $id === null) {
+            return $id;
+        }
+
+        try {
+            $type = $this->primaryKeyType($class);
+            if ($type === null) {
+                return $id;
+            }
+
+            $converter = $this->typeRegistry->getConverter($type);
+            if ($converter !== null) {
+                return $converter->convertToPHP($id);
+            }
+
+            return match (ltrim($type, '?')) {
+                'int' => is_string($id) && preg_match('/^-?\d+$/', $id) === 1 ? (int) $id : $id,
+                'string' => is_int($id) ? (string) $id : $id,
+                default => $id,
+            };
+        } catch (\Throwable) {
+            return $id;
+        }
+    }
+
+    private function primaryKeyType(string $class): ?string
+    {
+        $metadata = $this->metadataRegistry->getMetadata($class);
+        $primaryKeyColumns = $metadata->getPrimaryKeyColumns();
+        if (count($primaryKeyColumns) !== 1) {
+            return null;
+        }
+
+        $propertyName = $metadata->getPropertyNameForColumn($primaryKeyColumns[0]);
+
+        return $propertyName === null ? null : $metadata->getProperty($propertyName)?->getType();
     }
 
     /**
@@ -143,12 +198,8 @@ class EntityCacheCoordinator {
         $tableName = $this->metadataRegistry->getTableName($entityClass);
         $siblingClasses = $this->metadataRegistry->getClassesByTable($tableName);
 
-        if (empty($siblingClasses)) {
-            $this->secondLevelCache?->evict($entityClass, $id);
-        } else {
-            foreach ($siblingClasses as $class) {
-                $this->secondLevelCache?->evict($class, $id);
-            }
+        foreach (empty($siblingClasses) ? [$entityClass] : $siblingClasses as $class) {
+            $this->secondLevelCache?->evict($class, $this->canonicalId($class, $id));
         }
 
         $this->evictReverseIndexedQueryCacheEntries($tableName, $id);

@@ -20,6 +20,7 @@ class DateTimeInterfaceIntegrationTest extends AbstractTestCase {
     public function testDateTimeInterfaceMappingInMigrations(): void
     {
         $connection = $this->getConnection('mysql');
+        $connection->executeQuery('DROP TABLE IF EXISTS `test_date_time_entity`');
 
         $entity = new ReflectionEntity(TestDateTimeEntity::class);
         $reader = SchemaReaderFactory::create($connection);

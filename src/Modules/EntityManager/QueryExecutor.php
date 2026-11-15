@@ -12,6 +12,8 @@ use Articulate\Connection;
 use Articulate\Exceptions\ManagedVersionColumnException;
 use Articulate\Modules\Generators\GeneratorRegistry;
 use Articulate\Schema\EntityMetadata;
+use Articulate\Utils\DateTimeTypeConverter;
+use Articulate\Utils\JsonTypeConverter;
 use Articulate\Utils\ReflectionCache;
 use ReflectionProperty as NativeReflectionProperty;
 
@@ -271,7 +273,7 @@ class QueryExecutor {
         $values = [];
         foreach ($columnChanges as $columnName => $value) {
             $setParts[] = "{$columnName} = ?";
-            $values[] = $value;
+            $values[] = $this->normalizeForDatabase($value);
         }
 
         $allValues = array_merge($values, $whereValues);
@@ -598,6 +600,12 @@ class QueryExecutor {
         }
         if ($value instanceof \UnitEnum) {
             return $value->name;
+        }
+        if ($value instanceof \DateTimeInterface) {
+            return (new DateTimeTypeConverter())->convertToDatabase($value);
+        }
+        if (is_array($value)) {
+            return (new JsonTypeConverter())->convertToDatabase($value);
         }
 
         return $value;

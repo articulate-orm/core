@@ -1,7 +1,7 @@
 # Context — Articulate Core
 
 Glossary of domain terms used across this repo. Devoid of implementation detail by design —
-see ADRs under `docs-site/src/content/docs/reference/` for the "why" behind specific decisions.
+see ADRs under https://articulate-orm.github.io/reference/ (source: `articulate-orm/articulate-orm.github.io`) for the "why" behind specific decisions.
 
 ## Slices
 

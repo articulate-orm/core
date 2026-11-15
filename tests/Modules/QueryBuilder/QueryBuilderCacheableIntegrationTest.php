@@ -66,9 +66,12 @@ class QbIntCacheItem implements CacheItemInterface {
 /**
  * In-memory pool that behaves until switched $down, then throws on every
  * operation — simulates the cache backend going away mid-iteration.
+ * $generationDown fails only reads/writes of the per-table generation counter.
  */
 class QbIntCachePool implements CacheItemPoolInterface {
     public bool $down = false;
+
+    public bool $generationDown = false;
 
     /** @var array<string, CacheItemInterface> */
     private array $items = [];
@@ -76,6 +79,9 @@ class QbIntCachePool implements CacheItemPoolInterface {
     public function getItem(string $key): CacheItemInterface
     {
         $this->failIfDown();
+        if ($this->generationDown && str_starts_with($key, 'l2qgen_')) {
+            throw new QbIntCacheBackendDown('Generation counter unavailable.');
+        }
 
         return $this->items[$key] ??= new QbIntCacheItem($key);
     }
@@ -221,7 +227,7 @@ class QueryBuilderCacheableIntegrationTest extends DatabaseTestCase {
     }
 
     #[DataProvider('databaseProvider')]
-    public function testRowInsertedBetweenChunkIterationsIsNeitherDuplicatedNorSkippedNorServedStale(string $databaseName): void
+    public function testRowInsertedMidChunkSortingAfterTheCurrentPageIsNeitherDuplicatedNorSkippedNorServedStale(string $databaseName): void
     {
         $connection = $this->prepareProducts($databaseName);
         $em = new EntityManager($connection, secondLevelCache: new QbIntCachePool());
@@ -232,7 +238,7 @@ class QueryBuilderCacheableIntegrationTest extends DatabaseTestCase {
 
         $pages = [];
         foreach ($em->createQueryBuilder(QbIntProduct::class)->orderBy('id')->cacheable()->chunk(2) as $batch) {
-            $pages[] = array_map(static fn (QbIntProduct $product): string => $product->name, $batch);
+            $pages[] = $this->collectNames($batch);
 
             if (count($pages) === 1) {
                 $inserted = new QbIntProduct();
@@ -261,7 +267,7 @@ class QueryBuilderCacheableIntegrationTest extends DatabaseTestCase {
 
         $pages = [];
         foreach ($em->createQueryBuilder(QbIntProduct::class)->orderBy('id')->cacheable()->chunk(5) as $batch) {
-            $pages[] = array_map(static fn (QbIntProduct $product): string => $product->name, $batch);
+            $pages[] = $this->collectNames($batch);
 
             if (count($pages) === 1) {
                 $inserted = new QbIntProduct();
@@ -405,6 +411,28 @@ class QueryBuilderCacheableIntegrationTest extends DatabaseTestCase {
         $this->assertSame([['P1', 'P2'], ['P3', 'P4'], ['P5', 'P6']], $pages);
     }
 
+    #[DataProvider('databaseProvider')]
+    public function testAFailedGenerationReadNeverCachesAListThatALaterInsertCannotInvalidate(string $databaseName): void
+    {
+        $connection = $this->prepareProducts($databaseName);
+        $cache = new QbIntCachePool();
+        $cache->generationDown = true;
+        $em = new EntityManager($connection, secondLevelCache: $cache);
+
+        $em->createQueryBuilder(QbIntProduct::class)->orderBy('id')->cacheable()->getResult();
+        $inserted = new QbIntProduct();
+        $inserted->name = 'P6';
+        $em->persist($inserted);
+        $em->flush();
+        $em->clear();
+
+        $this->assertSame(
+            ['P1', 'P2', 'P3', 'P4', 'P5', 'P6'],
+            $this->collectNames($em->createQueryBuilder(QbIntProduct::class)->orderBy('id')->cacheable()->getResult()),
+            'A list cached while the generation was unreadable has no generation an insert can move.'
+        );
+    }
+
     /**
      * @param list<object> $products
      * @return list<string>
@@ -421,7 +449,7 @@ class QueryBuilderCacheableIntegrationTest extends DatabaseTestCase {
     {
         $pages = [];
         foreach ($queryBuilder->chunk($size) as $batch) {
-            $pages[] = array_map(static fn (object $product): string => $product->name, $batch);
+            $pages[] = $this->collectNames($batch);
         }
 
         return $pages;

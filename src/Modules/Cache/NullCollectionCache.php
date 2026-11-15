@@ -43,9 +43,9 @@ class NullCollectionCache implements CollectionCacheInterface {
         return [];
     }
 
-    public function getTableGeneration(string $tableName): int
+    public function getTableGeneration(string $tableName): ?int
     {
-        return 0;
+        return null;
     }
 
     public function incrementTableGeneration(string $tableName): void

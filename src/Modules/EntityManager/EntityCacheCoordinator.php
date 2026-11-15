@@ -55,7 +55,7 @@ class EntityCacheCoordinator {
     }
 
     /**
-     * @param array{inserts?: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
+     * @param array{inserts: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
      */
     public function invalidateSecondLevelCache(array $changes): void
     {
@@ -63,7 +63,7 @@ class EntityCacheCoordinator {
             return;
         }
 
-        $this->bumpInsertedTableGenerations($changes['inserts'] ?? []);
+        $this->bumpInsertedTableGenerations($changes['inserts']);
 
         foreach ($changes['updates'] as $update) {
             if ($update->entity !== null) {
@@ -123,8 +123,7 @@ class EntityCacheCoordinator {
     {
         $tableNames = [];
         foreach ($inserts as $entity) {
-            $entityClass = $entity instanceof Proxy\ProxyInterface ? $entity->getProxyEntityClass() : $entity::class;
-            $tableNames[$this->metadataRegistry->getTableName($entityClass)] = true;
+            $tableNames[$this->metadataRegistry->getTableName($this->resolveEntityClass($entity))] = true;
         }
 
         foreach (array_keys($tableNames) as $tableName) {
@@ -134,9 +133,7 @@ class EntityCacheCoordinator {
 
     private function evictEntityFromSecondLevelCache(object $entity): void
     {
-        $entityClass = $entity instanceof Proxy\ProxyInterface
-            ? $entity->getProxyEntityClass()
-            : $entity::class;
+        $entityClass = $this->resolveEntityClass($entity);
         $id = $this->extractEntityIdForCache($entity, $entityClass);
 
         if ($id === null) {
@@ -180,6 +177,11 @@ class EntityCacheCoordinator {
         }
 
         $this->collectionCache->evictReverseIndex($tableName, $id);
+    }
+
+    private function resolveEntityClass(object $entity): string
+    {
+        return $entity instanceof Proxy\ProxyInterface ? $entity->getProxyEntityClass() : $entity::class;
     }
 
     private function extractEntityIdForCache(object $entity, string $entityClass): mixed

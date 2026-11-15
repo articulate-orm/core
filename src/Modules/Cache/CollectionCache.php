@@ -165,7 +165,7 @@ class CollectionCache implements CollectionCacheInterface {
         }
     }
 
-    public function getTableGeneration(string $tableName): int
+    public function getTableGeneration(string $tableName): ?int
     {
         try {
             $item = $this->pool->getItem($this->tableGenerationKey($tableName));
@@ -179,7 +179,7 @@ class CollectionCache implements CollectionCacheInterface {
 
             return $generation;
         } catch (\Throwable) {
-            return 0;
+            return null;
         }
     }
 

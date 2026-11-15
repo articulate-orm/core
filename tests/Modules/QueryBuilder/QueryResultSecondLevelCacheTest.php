@@ -36,7 +36,7 @@ class SpyCollectionCache implements CollectionCacheInterface {
     /** @var list<array{table: string, ids: list<mixed>}> */
     public array $findMissingReverseIndexIdsCalls = [];
 
-    /** @var array<string, int> */
+    /** @var array<string, int|null> null simulates an unreadable counter */
     public array $tableGenerations = [];
 
     /** @var list<mixed>|null */
@@ -120,9 +120,9 @@ class SpyCollectionCache implements CollectionCacheInterface {
         return $this->missingReverseIndexIdsToReturn;
     }
 
-    public function getTableGeneration(string $tableName): int
+    public function getTableGeneration(string $tableName): ?int
     {
-        return $this->tableGenerations[$tableName] ?? 0;
+        return array_key_exists($tableName, $this->tableGenerations) ? $this->tableGenerations[$tableName] : 0;
     }
 
     public function incrementTableGeneration(string $tableName): void
@@ -235,8 +235,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM users', [1, 'x']);
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM users', [1, 'x']);
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM users', [1, 'x'], 'products');
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM users', [1, 'x'], 'products');
 
         $this->assertSame($keyA, $keyB);
     }
@@ -245,8 +245,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t', []);
-        $keyB = $cache->buildCacheKey('App\\Order', 'SELECT * FROM t', []);
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t', [], 'products');
+        $keyB = $cache->buildCacheKey('App\\Order', 'SELECT * FROM t', [], 'products');
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -255,8 +255,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE a = ?', []);
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE b = ?', []);
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE a = ?', [], 'products');
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE b = ?', [], 'products');
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -265,8 +265,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE id = ?', [1]);
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE id = ?', [2]);
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE id = ?', [1], 'products');
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE id = ?', [2], 'products');
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -277,8 +277,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         // and ('AppUser', 'SELECT...') could concatenate to the same string.
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App', 'UserSELECT 1', []);
-        $keyB = $cache->buildCacheKey('AppUser', 'SELECT 1', []);
+        $keyA = $cache->buildCacheKey('App', 'UserSELECT 1', [], 'products');
+        $keyB = $cache->buildCacheKey('AppUser', 'SELECT 1', [], 'products');
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -287,8 +287,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyNull = $cache->buildCacheKey(null, 'SELECT 1', []);
-        $keyEmptyString = $cache->buildCacheKey('', 'SELECT 1', []);
+        $keyNull = $cache->buildCacheKey(null, 'SELECT 1', [], 'products');
+        $keyEmptyString = $cache->buildCacheKey('', 'SELECT 1', [], 'products');
 
         // Both collapse to the same '' segment by design (documented behavior,
         // not a bug) — pin it explicitly so a future change notices.
@@ -313,16 +313,16 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $sql = 'SELECT * FROM users WHERE id = ?';
         $params = [42];
 
-        $expected = 'cq_' . hash('sha256', serialize(['', $entityClass, $sql, $params]));
+        $expected = 'cq_' . hash('sha256', serialize(['', $entityClass, $sql, $params, 'products:0']));
 
-        $this->assertSame($expected, $cache->buildCacheKey($entityClass, $sql, $params));
+        $this->assertSame($expected, $cache->buildCacheKey($entityClass, $sql, $params, 'products'));
     }
 
     public function testBuildCacheKeyHasTheCqPrefix(): void
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $key = $cache->buildCacheKey('App\\User', 'SELECT 1', []);
+        $key = $cache->buildCacheKey('App\\User', 'SELECT 1', [], 'products');
 
         $this->assertStringStartsWith('cq_', $key);
     }
@@ -331,8 +331,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x01"]);
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x02"]);
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x01"], 'products');
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x02"], 'products');
 
         $this->assertNotNull($keyA);
         $this->assertNotNull($keyB);
@@ -343,9 +343,9 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)]);
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(2)]);
-        $keyA2 = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)]);
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)], 'products');
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(2)], 'products');
+        $keyA2 = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)], 'products');
 
         $this->assertNotSame($keyA, $keyB);
         $this->assertSame($keyA, $keyA2);
@@ -355,8 +355,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([1])]);
-        $keyB = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([2])]);
+        $keyA = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([1])], 'products');
+        $keyB = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([2])], 'products');
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -366,12 +366,12 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
         $this->assertNotSame(
-            $cache->buildCacheKey(null, 'SELECT 1', [1]),
-            $cache->buildCacheKey(null, 'SELECT 1', ['1']),
+            $cache->buildCacheKey(null, 'SELECT 1', [1], 'products'),
+            $cache->buildCacheKey(null, 'SELECT 1', ['1'], 'products'),
         );
         $this->assertNotSame(
-            $cache->buildCacheKey(null, 'SELECT 1', [[1, 2]]),
-            $cache->buildCacheKey(null, 'SELECT 1', [[1], 2]),
+            $cache->buildCacheKey(null, 'SELECT 1', [[1, 2]], 'products'),
+            $cache->buildCacheKey(null, 'SELECT 1', [[1], 2], 'products'),
         );
     }
 
@@ -379,16 +379,16 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [new QbCacheUnserializableParam()]));
-        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [[new QbCacheUnserializableParam()]]));
-        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [fopen('php://memory', 'r')]));
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [new QbCacheUnserializableParam()], 'products'));
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [[new QbCacheUnserializableParam()]], 'products'));
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [fopen('php://memory', 'r')], 'products'));
     }
 
     public function testNullParamsAreAllowed(): void
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $this->assertNotNull($cache->buildCacheKey(null, 'SELECT 1', [null]));
+        $this->assertNotNull($cache->buildCacheKey(null, 'SELECT 1', [null], 'products'));
     }
 
     public function testNamespaceIsPartOfTheKey(): void
@@ -396,7 +396,7 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $a = new QueryResultSecondLevelCache(new SpyCollectionCache(), 'ns-a');
         $b = new QueryResultSecondLevelCache(new SpyCollectionCache(), 'ns-b');
 
-        $this->assertNotSame($a->buildCacheKey(null, 'SELECT 1', []), $b->buildCacheKey(null, 'SELECT 1', []));
+        $this->assertNotSame($a->buildCacheKey(null, 'SELECT 1', [], 'products'), $b->buildCacheKey(null, 'SELECT 1', [], 'products'));
     }
 
     public function testObjectParamKeyIncludesTheObjectTag(): void
@@ -404,9 +404,18 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
         $object = new QbCachePrivateFieldParam(1);
 
-        $expected = 'cq_' . hash('sha256', serialize(['', '', 'SELECT 1', [['o', QbCachePrivateFieldParam::class, serialize($object)]]]));
+        $expected = 'cq_' . hash('sha256', serialize(['', '', 'SELECT 1', [['o', QbCachePrivateFieldParam::class, serialize($object)]], 'products:0']));
 
-        $this->assertSame($expected, $cache->buildCacheKey(null, 'SELECT 1', [$object]));
+        $this->assertSame($expected, $cache->buildCacheKey(null, 'SELECT 1', [$object], 'products'));
+    }
+
+    public function testAnUnreadableTableGenerationYieldsNoKey(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $collectionCache->tableGenerations['products'] = null;
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [], 'products'));
     }
 
     public function testStoreIdsWithReverseIndexWritesTheIdListWhenEnabled(): void

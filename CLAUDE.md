@@ -69,6 +69,7 @@ Articulate is a context-bounded ORM for domain-driven PHP applications. PHP 8.4+
 | Database | `src/Modules/Database/` | Schema reader, type mappers per DB, schema comparator (diff engine) |
 | Repository | `src/Modules/Repository/` | AbstractRepository, EntityRepository, criteria pattern |
 | Migrations | `src/Modules/Migrations/` | Schema diff → migration SQL (MySQL & PostgreSQL generators) |
+| Cache | `src/Modules/Cache/` | Collection (query-region) cache storage: id-lists, reverse index, per-table insert generations |
 | Generators | `src/Modules/Generators/` | ID strategies: UUID v4/v7, ULID, AutoIncrement, Serial, Prefixed |
 | Attributes | `src/Attributes/` | All PHP attributes + reflection wrappers (ReflectionEntity, ReflectionProperty, ReflectionRelation) |
 | Schema | `src/Schema/` | EntityMetadata, EntityMetadataRegistry, naming conventions |
@@ -77,8 +78,8 @@ Articulate is a context-bounded ORM for domain-driven PHP applications. PHP 8.4+
 
 ### Architectural Boundaries
 
-Deptrac enforces 12 layers. The dependency direction is:
-`Commands → Migrations → Database → QueryBuilder → Repository → EntityManager → Schema → Attributes → Utils → Collection → Generators → Exceptions`
+Deptrac enforces 13 layers. The dependency direction is:
+`Commands → Migrations → Database → QueryBuilder → Repository → EntityManager → Schema → Attributes → Cache → Utils → Collection → Generators → Exceptions`
 
 Run `composer architecture:check` after adding cross-module dependencies.
 
@@ -158,6 +159,18 @@ Contract — read before relying on it:
 - **Sibling-class eviction is automatic within one `EntityManager`.** When `flush()` writes or deletes a row, the cache is evicted for every entity class mapped to the same table that the registry has seen in this session (via `EntityMetadataRegistry::getClassesByTable`). Example: deleting `Customer(id=1)` also evicts the `CustomerSummary(id=1)` entry. Classes never loaded in the session are not evicted — cross-`EntityManager` staleness still applies.
 - **Caches the root row only, not relations.** A cache hit returns a shallow hydrate; relations still lazy-load on access (consistent with a cold `find()`).
 - **IDs must be scalar, `Stringable`, or a composite array.** Keys are type-tagged so `1` (int) and `"1"` (string) never collide; non-`Stringable` objects throw (caught upstream → caching silently disabled for that ID).
+
+### Collection Cache
+
+`QueryBuilder::cacheable(?int $ttl)` caches the ordered **id-list** a query matched (never row data) in the second-level cache pool via `CollectionCache` (`src/Modules/Cache/`); a hit resolves entities through the identity map / `SecondLevelCache`. Only applies to default object hydration of an entity with a single-column primary key. Design: ADR-0002.
+
+Contract — read before relying on it:
+- **Updates/deletes invalidate exactly.** A reverse index (table + id → cache keys) evicts only the lists containing the changed row, at `flush()`.
+- **Inserts invalidate by generation.** Each key folds in a per-table insert-generation counter; a flushed insert bumps it once per table, and old lists age out via TTL.
+- **Root table only.** A change to a joined/filtered-through table does not invalidate the list; neither does an UPDATE that moves a row *into* a cached predicate.
+- **Unit-of-work writes only.** `QueryBuilder` DML and raw SQL neither evict nor bump.
+- **Cost:** one extra `getItem()` per `cacheable()` query for the generation counter.
+- **Fail-open, with caveats.** A backend fault never breaks a query: an unreadable generation skips the cache for that call. But a failed eviction or bump during an outage leaves pre-change lists matchable after recovery until TTL, and eviction/bump run before COMMIT, so a concurrent reader can re-cache pre-commit state.
 
 ### Metadata Cache
 

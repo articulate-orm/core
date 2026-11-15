@@ -110,7 +110,7 @@ class EntityCacheCoordinatorSpyCollectionCache implements CollectionCacheInterfa
         return [];
     }
 
-    public function getTableGeneration(string $tableName): int
+    public function getTableGeneration(string $tableName): ?int
     {
         return count(array_keys($this->incrementedTableGenerations, $tableName, true));
     }
@@ -337,7 +337,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys);
     }
@@ -353,7 +353,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [], 'deletes' => [$entity], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [], 'deletes' => [$entity], 'softDeletes' => []]);
 
         $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys);
     }
@@ -369,7 +369,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [], 'deletes' => [], 'softDeletes' => [$entity]]);
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => [$entity]]);
 
         $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys);
     }
@@ -385,7 +385,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame(['cache-key-a', 'cache-key-b'], $collectionCache->evictedIdListKeys);
     }
@@ -401,7 +401,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame([['table' => 'ecc_products', 'id' => 1]], $collectionCache->evictedReverseIndexEntries);
         $this->assertNull($collectionCache->getReverseIndexCacheKeys('ecc_products', 1));
@@ -417,7 +417,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 999;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame([], $collectionCache->evictedIdListKeys);
     }
@@ -435,7 +435,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProductSummary();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys, 'A write through a context-bounded sibling class must evict the reverse-indexed cache entry of the same table/row.');
     }
@@ -453,7 +453,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity = new EccProduct();
         $entity->id = 1;
 
-        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame([], $collectionCache->evictedIdListKeys, 'A write to table A must never evict a cached query belonging to an unrelated table B, even with a coincidentally-matching raw id.');
     }
@@ -468,7 +468,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $entity->id = 1;
 
         // Must not throw when no collection cache was ever configured.
-        $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
         $this->addToAssertionCount(1);
     }
 

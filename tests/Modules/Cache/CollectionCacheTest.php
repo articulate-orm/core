@@ -709,6 +709,6 @@ class CollectionCacheTest extends TestCase {
         $cache = new CollectionCache(new FailingCachePool());
 
         $cache->incrementTableGeneration('products');
-        $this->assertSame(0, $cache->getTableGeneration('products'));
+        $this->assertNull($cache->getTableGeneration('products'));
     }
 }

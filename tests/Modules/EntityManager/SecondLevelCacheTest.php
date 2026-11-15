@@ -186,6 +186,18 @@ class EntitylessMergedUpdateStrategy implements UpdateConflictResolutionStrategy
     }
 }
 
+class FailingBatchCache extends L2ArrayCache {
+    public function getItems(array $keys = []): never
+    {
+        throw new \RuntimeException('Cache backend failure');
+    }
+
+    public function commit(): never
+    {
+        throw new \RuntimeException('Cache backend failure');
+    }
+}
+
 class SecondLevelCacheTest extends DatabaseTestCase {
     #[DataProvider('databaseProvider')]
     public function testFindPopulatesCache(string $databaseName): void
@@ -202,7 +214,7 @@ class SecondLevelCacheTest extends DatabaseTestCase {
 
         $em->find(L2CacheUser::class, $id);
 
-        $key = (new SecondLevelCache($cache))->generateKey(L2CacheUser::class, $id);
+        $key = (new SecondLevelCache($cache, 3600, $connection->getCacheNamespace()))->generateKey(L2CacheUser::class, $id);
         $this->assertTrue($cache->hasItem($key));
     }
 
@@ -346,7 +358,7 @@ class SecondLevelCacheTest extends DatabaseTestCase {
 
         $em->find(L2CacheUser::class, $id);
 
-        $key = (new SecondLevelCache($cache))->generateKey(L2CacheUser::class, $id);
+        $key = (new SecondLevelCache($cache, 3600, $connection->getCacheNamespace()))->generateKey(L2CacheUser::class, $id);
         $this->assertTrue($cache->hasItem($key));
 
         sleep(2);
@@ -381,7 +393,7 @@ class SecondLevelCacheTest extends DatabaseTestCase {
         $em->flush();
         $em->clear();
 
-        $l2 = new SecondLevelCache($cache);
+        $l2 = new SecondLevelCache($cache, 3600, $connection->getCacheNamespace());
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUser::class, $id)), 'L2CacheUser cache entry should be evicted');
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUserSummary::class, $id)), 'L2CacheUserSummary cache entry should be evicted alongside sibling');
     }
@@ -411,7 +423,7 @@ class SecondLevelCacheTest extends DatabaseTestCase {
         $em->flush();
         $em->clear();
 
-        $l2 = new SecondLevelCache($cache);
+        $l2 = new SecondLevelCache($cache, 3600, $connection->getCacheNamespace());
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUser::class, $id)), 'L2CacheUser cache entry should be evicted');
         $this->assertFalse($cache->hasItem($l2->generateKey(L2CacheUserSummary::class, $id)), 'L2CacheUserSummary cache entry should be evicted alongside sibling');
     }
@@ -508,6 +520,131 @@ class SecondLevelCacheTest extends DatabaseTestCase {
 
         $this->expectException(\InvalidArgumentException::class);
         $cache->generateKey(L2CacheUser::class, new \stdClass());
+    }
+
+    public function testSetManyThenGetManyRoundTripsInOrderWithMissesAsNull(): void
+    {
+        $cache = new SecondLevelCache(new L2ArrayCache());
+
+        $cache->setMany(L2CacheUser::class, [[1, ['name' => 'a']], [3, ['name' => 'c']]]);
+
+        $this->assertSame(
+            [['name' => 'a'], null, ['name' => 'c']],
+            $cache->getMany(L2CacheUser::class, [1, 2, 3]),
+        );
+    }
+
+    public function testGetManyHandlesRepeatedIds(): void
+    {
+        $cache = new SecondLevelCache(new L2ArrayCache());
+        $cache->setMany(L2CacheUser::class, [[1, ['name' => 'a']]]);
+
+        $this->assertSame(
+            [['name' => 'a'], ['name' => 'a']],
+            $cache->getMany(L2CacheUser::class, [1, 1]),
+        );
+    }
+
+    public function testGetManyPreservesInputIndexes(): void
+    {
+        $cache = new SecondLevelCache(new L2ArrayCache());
+        $cache->setMany(L2CacheUser::class, [[5, ['name' => 'x']]]);
+
+        $this->assertSame([2 => ['name' => 'x'], 7 => null], $cache->getMany(L2CacheUser::class, [2 => 5, 7 => 6]));
+    }
+
+    public function testGetManyIsGracefulOnBackendFailure(): void
+    {
+        $cache = new SecondLevelCache(new FailingBatchCache());
+
+        $this->assertSame([null, null], $cache->getMany(L2CacheUser::class, [1, 2]));
+    }
+
+    public function testSetManyIsGracefulOnBackendFailure(): void
+    {
+        $cache = new SecondLevelCache(new FailingBatchCache());
+
+        $cache->setMany(L2CacheUser::class, [[1, ['name' => 'a']]]);
+        $this->addToAssertionCount(1);
+    }
+
+    public function testSetPersistsViaPoolSave(): void
+    {
+        $pool = new L2ArrayCache();
+        $cache = new SecondLevelCache($pool);
+
+        $cache->set(L2CacheUser::class, 1, ['name' => 'a']);
+
+        $this->assertSame(['name' => 'a'], (new SecondLevelCache($pool))->get(L2CacheUser::class, 1));
+    }
+
+    public function testStringableKeyIncludesTheValue(): void
+    {
+        $cache = new SecondLevelCache(new L2ArrayCache());
+        $a = new class() implements \Stringable {
+            public function __toString(): string
+            {
+                return 'a';
+            }
+        };
+        $b = new class() implements \Stringable {
+            public function __toString(): string
+            {
+                return 'b';
+            }
+        };
+
+        $this->assertNotSame($cache->generateKey(L2CacheUser::class, $a), $cache->generateKey(L2CacheUser::class, $b));
+    }
+
+    public function testInvalidIdentifierMessageNamesTheType(): void
+    {
+        $cache = new SecondLevelCache(new L2ArrayCache());
+
+        $this->expectExceptionMessage('stdClass');
+        $cache->generateKey(L2CacheUser::class, new \stdClass());
+    }
+
+    public function testNamespaceChangesTheKey(): void
+    {
+        $pool = new L2ArrayCache();
+
+        $this->assertNotSame(
+            (new SecondLevelCache($pool, 3600, 'a'))->generateKey(L2CacheUser::class, 1),
+            (new SecondLevelCache($pool, 3600, 'b'))->generateKey(L2CacheUser::class, 1),
+        );
+    }
+
+    /**
+     * Pins the exact concatenation order (class . ':' . normalizedId). A
+     * relative-difference assertion (e.g. testIntAndStringIdsDoNotCollide)
+     * can't catch a mutant that reorders the concatenation — both sides of
+     * a differing-input comparison still differ under that mutant. Only an
+     * independently-computed golden value catches it.
+     */
+    public function testGenerateKeyMatchesTheDocumentedFormatExactly(): void
+    {
+        $cache = new SecondLevelCache(new L2ArrayCache());
+
+        $expected = hash('sha256', L2CacheUser::class . ':i:42');
+
+        $this->assertSame($expected, $cache->generateKey(L2CacheUser::class, 42));
+    }
+
+    /**
+     * Pins the exact per-pair concatenation order inside the composite-key
+     * normalizer (key . '=' . normalize(value)). testCompositeKeyOrderIsStable
+     * only proves two differently-keyed calls still differ under a swap —
+     * it can't catch a mutant that reorders key/value within one pair,
+     * since re-sorting by key still differs for differing inputs.
+     */
+    public function testCompositeKeyPairFormatMatchesTheDocumentedShapeExactly(): void
+    {
+        $cache = new SecondLevelCache(new L2ArrayCache());
+
+        $expected = hash('sha256', L2CacheUser::class . ':a:[id=i:7,tenant=i:4]');
+
+        $this->assertSame($expected, $cache->generateKey(L2CacheUser::class, ['tenant' => 4, 'id' => 7]));
     }
 
     // -------------------------------------------------------------------------

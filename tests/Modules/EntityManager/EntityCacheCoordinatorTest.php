@@ -57,6 +57,9 @@ class EntityCacheCoordinatorSpyCollectionCache implements CollectionCacheInterfa
     /** @var list<array{table: string, id: mixed}> */
     public array $evictedReverseIndexEntries = [];
 
+    /** @var list<string> */
+    public array $incrementedTableGenerations = [];
+
     /**
      * @param list<string> $cacheKeys
      */
@@ -105,6 +108,16 @@ class EntityCacheCoordinatorSpyCollectionCache implements CollectionCacheInterfa
     public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array
     {
         return [];
+    }
+
+    public function getTableGeneration(string $tableName): int
+    {
+        return count(array_keys($this->incrementedTableGenerations, $tableName, true));
+    }
+
+    public function incrementTableGeneration(string $tableName): void
+    {
+        $this->incrementedTableGenerations[] = $tableName;
     }
 }
 
@@ -457,5 +470,40 @@ class EntityCacheCoordinatorTest extends TestCase {
         // Must not throw when no collection cache was ever configured.
         $coordinator->invalidateSecondLevelCache(['updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
         $this->addToAssertionCount(1);
+    }
+
+    public function testInsertsBumpEachInsertedTablesGenerationExactlyOncePerFlush(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
+        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
+
+        $coordinator->invalidateSecondLevelCache([
+            'inserts' => [new EccProduct(), new EccProduct(), new EccProductSummary(), new EccOrder()],
+            'updates' => [],
+            'deletes' => [],
+            'softDeletes' => [],
+        ]);
+
+        $this->assertSame(
+            ['ecc_products', 'ecc_orders'],
+            $collectionCache->incrementedTableGenerations,
+            'Several inserts into one table (through any sibling class) must bump that table once per flush, and only tables that received inserts.'
+        );
+    }
+
+    public function testAFlushWithoutInsertsBumpsNoTableGeneration(): void
+    {
+        $registry = new EntityMetadataRegistry();
+        $registry->getMetadata(EccProduct::class);
+        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
+        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
+
+        $entity = new EccProduct();
+        $entity->id = 1;
+
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [$entity], 'softDeletes' => []]);
+
+        $this->assertSame([], $collectionCache->incrementedTableGenerations);
     }
 }

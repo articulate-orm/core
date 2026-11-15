@@ -116,16 +116,25 @@ class QueryResultSecondLevelCache {
      * string (unserializable objects, resources) — the caller must then skip
      * caching rather than risk two different queries sharing a key.
      *
+     * When $tableName is given, that table's insert-generation counter is
+     * folded in as `tableName:generation`, so an insert into the table makes
+     * every previously built key for it stop matching (ADR-0002, case (b)).
+     *
      * @param list<mixed> $params
      */
-    public function buildCacheKey(?string $entityClass, string $sql, array $params): ?string
+    public function buildCacheKey(?string $entityClass, string $sql, array $params, ?string $tableName = null): ?string
     {
         $normalized = $this->normalizeParams($params);
         if ($normalized === null) {
             return null;
         }
 
-        return 'cq_' . hash('sha256', serialize([$this->namespace, $entityClass ?? '', $sql, $normalized]));
+        $parts = [$this->namespace, $entityClass ?? '', $sql, $normalized];
+        if ($tableName !== null) {
+            $parts[] = $tableName . ':' . $this->collectionCache->getTableGeneration($tableName);
+        }
+
+        return 'cq_' . hash('sha256', serialize($parts));
     }
 
     /**

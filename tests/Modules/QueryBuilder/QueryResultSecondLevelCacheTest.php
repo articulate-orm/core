@@ -36,6 +36,9 @@ class SpyCollectionCache implements CollectionCacheInterface {
     /** @var list<array{table: string, ids: list<mixed>}> */
     public array $findMissingReverseIndexIdsCalls = [];
 
+    /** @var array<string, int> */
+    public array $tableGenerations = [];
+
     /** @var list<mixed>|null */
     private ?array $nextGetResult = null;
 
@@ -115,6 +118,16 @@ class SpyCollectionCache implements CollectionCacheInterface {
         $this->findMissingReverseIndexIdsCalls[] = ['table' => $tableName, 'ids' => $ids, 'cacheKey' => $cacheKey];
 
         return $this->missingReverseIndexIdsToReturn;
+    }
+
+    public function getTableGeneration(string $tableName): int
+    {
+        return $this->tableGenerations[$tableName] ?? 0;
+    }
+
+    public function incrementTableGeneration(string $tableName): void
+    {
+        $this->tableGenerations[$tableName] = ($this->tableGenerations[$tableName] ?? 0) + 1;
     }
 }
 

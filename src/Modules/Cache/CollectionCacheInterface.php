@@ -67,4 +67,14 @@ interface CollectionCacheInterface {
      * @return list<mixed>
      */
     public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array;
+
+    /**
+     * Per-table insert-generation counter (ADR-0002, invalidation case (b)).
+     * Folded into every id-list cache key as `tableName:generation`, so an
+     * insert that bumps it makes every previously cached key for that table
+     * stop matching — they age out via TTL, no sweep. 0 when never bumped.
+     */
+    public function getTableGeneration(string $tableName): int;
+
+    public function incrementTableGeneration(string $tableName): void;
 }

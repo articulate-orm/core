@@ -67,6 +67,15 @@ same mechanism `EntityCacheCoordinator::incrementQueryCacheGeneration()` already
 table instead of one global counter). An INSERT recorded in `$aggregatedChanges` for a table bumps that
 table's counter; old keys stop matching and age out via TTL, no explicit sweep needed.
 
+Implementation notes: the counter lives in the collection-cache pool under `l2qgen_` (hash of namespace +
+table), read via `CollectionCacheInterface::getTableGeneration()` while building each `cacheable()` key and
+bumped via `incrementTableGeneration()` from `EntityCacheCoordinator` at flush time — once per table per
+flush, however many rows (through however many sibling classes) were inserted into it. A missing counter
+is seeded with a random value rather than 0: if the backend drops the counter while id-lists keyed by
+older generations survive, restarting at a previously used value would let one of them match again. Cost:
+one extra `getItem()` per `cacheable()` query (the key depends on it, so it cannot be batched with the
+id-list read) and one seed `save()` per cold table.
+
 **Reverse-index TTL** is set to the query-cache entry's TTL **plus a fixed grace buffer** (`REVERSE_INDEX_GRACE_SECONDS`, 300s),
 so the index always outlives the entry it points at — a stale/orphaned reverse-index entry is harmless
 (it just points at an already-expired key, a clean miss).

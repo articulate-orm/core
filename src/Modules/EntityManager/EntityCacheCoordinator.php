@@ -55,13 +55,15 @@ class EntityCacheCoordinator {
     }
 
     /**
-     * @param array{updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
+     * @param array{inserts?: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
      */
     public function invalidateSecondLevelCache(array $changes): void
     {
         if ($this->secondLevelCache === null && $this->collectionCache instanceof NullCollectionCache) {
             return;
         }
+
+        $this->bumpInsertedTableGenerations($changes['inserts'] ?? []);
 
         foreach ($changes['updates'] as $update) {
             if ($update->entity !== null) {
@@ -108,6 +110,26 @@ class EntityCacheCoordinator {
     public function setSecondLevelCacheDataMany(string $class, array $idRowPairs): void
     {
         $this->secondLevelCache?->setMany($class, $idRowPairs);
+    }
+
+    /**
+     * Inserts can't be matched against cached WHERE clauses (ADR-0002, case
+     * (b)), so each table that received at least one insert gets exactly one
+     * generation bump per flush, however many rows went into it.
+     *
+     * @param object[] $inserts
+     */
+    private function bumpInsertedTableGenerations(array $inserts): void
+    {
+        $tableNames = [];
+        foreach ($inserts as $entity) {
+            $entityClass = $entity instanceof Proxy\ProxyInterface ? $entity->getProxyEntityClass() : $entity::class;
+            $tableNames[$this->metadataRegistry->getTableName($entityClass)] = true;
+        }
+
+        foreach (array_keys($tableNames) as $tableName) {
+            $this->collectionCache->incrementTableGeneration((string) $tableName);
+        }
     }
 
     private function evictEntityFromSecondLevelCache(object $entity): void

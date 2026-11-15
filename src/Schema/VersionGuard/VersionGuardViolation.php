@@ -9,8 +9,8 @@ enum VersionGuardViolation {
 
     /**
      * Only a missing acknowledgement may be downgraded to a warning. Rival counters
-     * (ADR-0001) and a plain version column (PR #48) are real lost-update risks
-     * and stay errors whatever the caller's leniency.
+     * (ADR-0001) and a plain version column (bypasses the bump/check) are real
+     * lost-update risks and stay errors whatever the caller's leniency.
      */
     public function downgradable(): bool
     {

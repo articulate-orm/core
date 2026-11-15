@@ -266,7 +266,7 @@ class TypeRegistry {
 
         // DateTime types (basic mapping for now)
         $this->registerType('DateTime', 'DATETIME', new DateTimeTypeConverter());
-        $this->registerType('DateTimeImmutable', 'DATETIME', new DateTimeTypeConverter());
+        $this->registerType('DateTimeImmutable', 'DATETIME', new DateTimeTypeConverter(\DateTimeImmutable::class));
 
         // Example custom spatial type (requires spatial extensions)
         $this->registerType(Point::class, 'POINT', new PointTypeConverter());
@@ -284,7 +284,7 @@ class TypeRegistry {
         $this->registerType('?string', 'VARCHAR(255)');
         $this->registerType('?bool', 'TINYINT(1)', new BoolTypeConverter());
         $this->registerType('?DateTime', 'DATETIME', new DateTimeTypeConverter());
-        $this->registerType('?DateTimeImmutable', 'DATETIME', new DateTimeTypeConverter());
+        $this->registerType('?DateTimeImmutable', 'DATETIME', new DateTimeTypeConverter(\DateTimeImmutable::class));
         $this->registerType('?' . Point::class, 'POINT', new PointTypeConverter());
     }
 }

@@ -6,6 +6,15 @@ use DateTime;
 use DateTimeImmutable;
 
 class DateTimeTypeConverter implements TypeConverterInterface {
+    /**
+     * @param class-string<\DateTimeInterface>|null $defaultTargetType used when convertToPHP() gets no target type,
+     *                                                    which is how the hydrators call it through TypeConverterInterface
+     */
+    public function __construct(
+        private readonly ?string $defaultTargetType = null,
+    ) {
+    }
+
     public function convertToDatabase(mixed $value): mixed
     {
         if ($value === null) {
@@ -21,6 +30,8 @@ class DateTimeTypeConverter implements TypeConverterInterface {
 
     public function convertToPHP(mixed $value, ?string $targetType = null): mixed
     {
+        $targetType ??= $this->defaultTargetType;
+
         if ($value === null) {
             return null;
         }

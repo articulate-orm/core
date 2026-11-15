@@ -74,4 +74,19 @@ class DateTimeTypeConverterTest extends TestCase {
 
         $this->assertSame($dateTime, $result);
     }
+
+    public function testDefaultTargetTypeAppliesWhenNoneIsPassed(): void
+    {
+        $converter = new DateTimeTypeConverter(DateTimeImmutable::class);
+
+        $this->assertInstanceOf(DateTimeImmutable::class, $converter->convertToPHP('2024-06-01 08:00:00'));
+        $this->assertInstanceOf(DateTimeImmutable::class, $converter->convertToPHP(new DateTime('2024-06-01 08:00:00')));
+    }
+
+    public function testExplicitTargetTypeOverridesDefault(): void
+    {
+        $converter = new DateTimeTypeConverter(DateTimeImmutable::class);
+
+        $this->assertInstanceOf(DateTime::class, $converter->convertToPHP('2024-06-01 08:00:00', DateTime::class));
+    }
 }

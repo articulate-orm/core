@@ -106,8 +106,8 @@ $user = $em->getRepository(User::class)->find($user->id);
 - `README.md` (repo root) — full feature tour: optimistic locking details,
   polymorphic many-to-many (`MorphToMany`/`MorphedByMany`), type mapping,
   repository pattern, caching, connection pooling, index attributes.
-- `docs-site/` — the published Astro Starlight docs
-  (https://articulate-orm.github.io/core/) — same content, browsable.
+- https://articulate-orm.github.io/ — the published Astro Starlight docs
+  (source repo: `articulate-orm/articulate-orm.github.io`) — guides, ADRs, changelog.
 - `CHANGELOG.md` — what changed between releases; check before assuming an
   API shape from an old blog post or training data.
 - `CLAUDE.md` — contributor/dev guide for the `core` repo itself (module

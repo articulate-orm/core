@@ -2,6 +2,7 @@
 
 namespace Articulate\Modules\EntityManager;
 
+use Articulate\Modules\Cache\CollectionCacheInterface;
 use Articulate\Modules\Generators\GeneratorRegistry;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Schema\HydratorInterface;
@@ -29,7 +30,7 @@ class EntityManagerOptions {
 
     public ?CacheItemPoolInterface $secondLevelCache = null;
 
-    public int $secondLevelCacheTtl = 3600;
+    public int $secondLevelCacheTtl = CollectionCacheInterface::DEFAULT_TTL;
 
     public ?CacheItemPoolInterface $metadataCache = null;
 

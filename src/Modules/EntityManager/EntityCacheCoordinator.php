@@ -55,13 +55,15 @@ class EntityCacheCoordinator {
     }
 
     /**
-     * @param array{updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
+     * @param array{inserts: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
      */
     public function invalidateSecondLevelCache(array $changes): void
     {
         if ($this->secondLevelCache === null && $this->collectionCache instanceof NullCollectionCache) {
             return;
         }
+
+        $this->bumpInsertedTableGenerations($changes['inserts']);
 
         foreach ($changes['updates'] as $update) {
             if ($update->entity !== null) {
@@ -110,11 +112,28 @@ class EntityCacheCoordinator {
         $this->secondLevelCache?->setMany($class, $idRowPairs);
     }
 
+    /**
+     * Inserts can't be matched against cached WHERE clauses (ADR-0002, case
+     * (b)), so each table that received at least one insert gets exactly one
+     * generation bump per flush, however many rows went into it.
+     *
+     * @param object[] $inserts
+     */
+    private function bumpInsertedTableGenerations(array $inserts): void
+    {
+        $tableNames = [];
+        foreach ($inserts as $entity) {
+            $tableNames[$this->metadataRegistry->getTableName($this->resolveEntityClass($entity))] = true;
+        }
+
+        foreach (array_keys($tableNames) as $tableName) {
+            $this->collectionCache->incrementTableGeneration((string) $tableName);
+        }
+    }
+
     private function evictEntityFromSecondLevelCache(object $entity): void
     {
-        $entityClass = $entity instanceof Proxy\ProxyInterface
-            ? $entity->getProxyEntityClass()
-            : $entity::class;
+        $entityClass = $this->resolveEntityClass($entity);
         $id = $this->extractEntityIdForCache($entity, $entityClass);
 
         if ($id === null) {
@@ -158,6 +177,11 @@ class EntityCacheCoordinator {
         }
 
         $this->collectionCache->evictReverseIndex($tableName, $id);
+    }
+
+    private function resolveEntityClass(object $entity): string
+    {
+        return $entity instanceof Proxy\ProxyInterface ? $entity->getProxyEntityClass() : $entity::class;
     }
 
     private function extractEntityIdForCache(object $entity, string $entityClass): mixed

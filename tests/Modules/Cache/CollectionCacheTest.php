@@ -642,4 +642,73 @@ class CollectionCacheTest extends TestCase {
 
         $this->assertSame([1], $cache->findMissingReverseIndexIds('products', [1], 'list-a'));
     }
+
+    public function testIncrementTableGenerationAdvancesOnlyThatTable(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+        $productsBefore = $cache->getTableGeneration('products');
+        $ordersBefore = $cache->getTableGeneration('orders');
+
+        $cache->incrementTableGeneration('products');
+
+        $this->assertSame($productsBefore + 1, $cache->getTableGeneration('products'));
+        $this->assertSame($ordersBefore, $cache->getTableGeneration('orders'));
+    }
+
+    public function testTableGenerationIsStableAcrossReads(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+
+        $this->assertSame($cache->getTableGeneration('products'), $cache->getTableGeneration('products'));
+    }
+
+    public function testTableGenerationIsSharedThroughThePool(): void
+    {
+        $pool = new ArrayCachePool();
+        $writer = new CollectionCache($pool);
+        $reader = new CollectionCache($pool);
+        $before = $reader->getTableGeneration('products');
+
+        $writer->incrementTableGeneration('products');
+
+        $this->assertSame($before + 1, $reader->getTableGeneration('products'));
+    }
+
+    public function testTableGenerationIsScopedByNamespace(): void
+    {
+        $pool = new ArrayCachePool();
+        $tenantA = new CollectionCache($pool, 'tenant-a');
+        $tenantB = new CollectionCache($pool, 'tenant-b');
+        $before = $tenantB->getTableGeneration('products');
+
+        $tenantA->incrementTableGeneration('products');
+
+        $this->assertSame($before, $tenantB->getTableGeneration('products'));
+    }
+
+    public function testAnEvictedGenerationCounterNeverComesBackAsAGenerationAlreadyKeyedAgainst(): void
+    {
+        $pool = new ArrayCachePool();
+        $cache = new CollectionCache($pool);
+        $seen = [$cache->getTableGeneration('products')];
+        $cache->incrementTableGeneration('products');
+        $seen[] = $cache->getTableGeneration('products');
+
+        // The backend drops the counter (LRU / restart) while id-lists keyed by older generations may survive.
+        $pool->clear();
+
+        $this->assertNotContains(
+            $cache->getTableGeneration('products'),
+            $seen,
+            'Restarting the counter at a previously used value would let a stale id-list cached under that generation match again.'
+        );
+    }
+
+    public function testTableGenerationIsGracefulOnBackendFailure(): void
+    {
+        $cache = new CollectionCache(new FailingCachePool());
+
+        $cache->incrementTableGeneration('products');
+        $this->assertNull($cache->getTableGeneration('products'));
+    }
 }

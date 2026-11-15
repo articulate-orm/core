@@ -22,4 +22,11 @@ class NullCollectionCacheTest extends TestCase {
         // A no-op write must not make a subsequent read a hit.
         $this->assertNull($cache->getIdList('any-key'));
     }
+
+    public function testTableGenerationIsNeverAvailable(): void
+    {
+        $cache = new NullCollectionCache();
+
+        $this->assertNull($cache->getTableGeneration('products'));
+    }
 }

@@ -11,6 +11,7 @@ use Psr\Cache\CacheItemPoolInterface;
  *  - `l2q_`    id-lists matched by a `cacheable()` query
  *  - `l2qidx_` reverse-index entries (hash of namespace + table + normalized id -> [cacheKey,...]),
  *              used for exact write-time invalidation + read-time cross-validation.
+ *  - `l2qgen_` per-table insert-generation counters (hash of namespace + table -> int, randomly seeded).
  *
  * Prefixes avoid the PSR-6 reserved characters {}()/\@: so real pools accept the keys.
  *
@@ -21,6 +22,8 @@ class CollectionCache implements CollectionCacheInterface {
     private const ID_LIST_PREFIX = 'l2q_';
 
     private const REVERSE_INDEX_PREFIX = 'l2qidx_';
+
+    private const TABLE_GENERATION_PREFIX = 'l2qgen_';
 
     /**
      * Fixed grace buffer added on top of the query-cache entry's own TTL so
@@ -160,6 +163,51 @@ class CollectionCache implements CollectionCacheInterface {
             // discards the cached list and requeries, never serving stale data.
             return $ids;
         }
+    }
+
+    public function getTableGeneration(string $tableName): ?int
+    {
+        try {
+            $item = $this->pool->getItem($this->tableGenerationKey($tableName));
+            if ($item->isHit()) {
+                return (int) $item->get();
+            }
+
+            $generation = $this->seedGeneration();
+            $item->set($generation);
+            $this->pool->save($item);
+
+            return $generation;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    public function incrementTableGeneration(string $tableName): void
+    {
+        try {
+            $item = $this->pool->getItem($this->tableGenerationKey($tableName));
+            $item->set($item->isHit() ? (int) $item->get() + 1 : $this->seedGeneration());
+            $this->pool->save($item);
+        } catch (\Throwable) {
+            // Cache failure never breaks query execution — fail open to a database read.
+        }
+    }
+
+    /**
+     * A counter the backend dropped while older id-lists survived must not
+     * restart at a value those lists were keyed against, so a missing counter
+     * starts from a random point rather than 0. Capped well below PHP_INT_MAX
+     * so increments never overflow.
+     */
+    private function seedGeneration(): int
+    {
+        return random_int(1, 1 << 53);
+    }
+
+    private function tableGenerationKey(string $tableName): string
+    {
+        return self::TABLE_GENERATION_PREFIX . hash('sha256', $this->namespace . "\0" . $tableName);
     }
 
     private function reverseIndexKey(string $tableName, mixed $id): string

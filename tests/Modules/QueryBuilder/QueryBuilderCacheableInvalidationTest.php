@@ -428,6 +428,112 @@ class QueryBuilderCacheableInvalidationTest extends DatabaseTestCase {
         );
     }
 
+    #[DataProvider('databaseProvider')]
+    public function testInsertingANewlyMatchingRowAndFlushingMissesTheCachedQuery(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_inv_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+
+        $cache = new QbInvArrayCachePool();
+        $em = new EntityManager($connection, secondLevelCache: $cache);
+
+        $firstResult = $em->createQueryBuilder(QbInvProduct::class)->where('price < ?', 100)->orderBy('id')->cacheable()->getResult();
+        $this->assertCount(1, $firstResult);
+
+        $gadget = new QbInvProduct();
+        $gadget->name = 'Gadget';
+        $gadget->price = 20;
+        $em->persist($gadget);
+        $em->flush();
+        $em->clear();
+
+        $secondResult = $em->createQueryBuilder(QbInvProduct::class)->where('price < ?', 100)->orderBy('id')->cacheable()->getResult();
+
+        $this->assertSame(
+            ['Widget', 'Gadget'],
+            array_map(static fn (QbInvProduct $product): string => $product->name, $secondResult),
+            'A re-run after inserting a newly matching row must miss the cache and include the new row.'
+        );
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testInsertingIntoAnUnrelatedTableKeepsTheCachedQueryAHit(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->createOrderTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_inv_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+
+        $cache = new QbInvArrayCachePool();
+        $em = new EntityManager($connection, secondLevelCache: $cache);
+
+        $em->createQueryBuilder(QbInvProduct::class)->orderBy('id')->cacheable()->getResult();
+
+        // Bypasses the ORM, so only a fresh database read could observe it.
+        $connection->executeQuery('INSERT INTO qb_inv_products (name, price) VALUES (?, ?)', ['Unseen', 30]);
+
+        $order = new QbInvOrder();
+        $order->reference = 'ORD-1';
+        $em->persist($order);
+        $em->flush();
+        $em->clear();
+
+        $secondResult = $em->createQueryBuilder(QbInvProduct::class)->orderBy('id')->cacheable()->getResult();
+
+        $this->assertSame(
+            ['Widget'],
+            array_map(static fn (QbInvProduct $product): string => $product->name, $secondResult),
+            'An insert into an unrelated table must not change the generation of a cached query against a different table.'
+        );
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testSeveralInsertsIntoOneTableInOneFlushAllAppearOnTheNextRead(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $cache = new QbInvArrayCachePool();
+        $em = new EntityManager($connection, secondLevelCache: $cache);
+
+        $this->assertSame([], $em->createQueryBuilder(QbInvProduct::class)->orderBy('id')->cacheable()->getResult());
+
+        foreach (['Widget', 'Gadget', 'Doohickey'] as $index => $name) {
+            $product = new QbInvProduct();
+            $product->name = $name;
+            $product->price = 10 * ($index + 1);
+            $em->persist($product);
+        }
+        $em->flush();
+        $em->clear();
+
+        $afterFirstFlush = $em->createQueryBuilder(QbInvProduct::class)->orderBy('id')->cacheable()->getResult();
+        $this->assertSame(
+            ['Widget', 'Gadget', 'Doohickey'],
+            array_map(static fn (QbInvProduct $product): string => $product->name, $afterFirstFlush)
+        );
+
+        $sprocket = new QbInvProduct();
+        $sprocket->name = 'Sprocket';
+        $sprocket->price = 40;
+        $em->persist($sprocket);
+        $em->flush();
+        $em->clear();
+
+        $afterSecondFlush = $em->createQueryBuilder(QbInvProduct::class)->orderBy('id')->cacheable()->getResult();
+        $this->assertSame(
+            ['Widget', 'Gadget', 'Doohickey', 'Sprocket'],
+            array_map(static fn (QbInvProduct $product): string => $product->name, $afterSecondFlush),
+            'Every flush that inserts into the table must bump its generation again — no missed bump after a multi-row flush.'
+        );
+    }
+
     private function createProductTable(Connection $connection, string $databaseName): void
     {
         if ($databaseName === 'pgsql') {

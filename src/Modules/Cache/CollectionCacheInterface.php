@@ -67,4 +67,20 @@ interface CollectionCacheInterface {
      * @return list<mixed>
      */
     public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array;
+
+    /**
+     * Per-table insert-generation counter (ADR-0002, invalidation case (b)).
+     * Folded into every id-list cache key as `tableName:generation`, so an
+     * insert that bumps it makes every previously cached key for that table
+     * stop matching — they age out via TTL, no sweep. A counter that does not
+     * exist yet is seeded with a random value, never 0, so a dropped counter
+     * cannot restart at a generation older lists were keyed against.
+     *
+     * @return int|null null when the counter cannot be read; the caller must
+     *                  then skip caching, since a list stored without a real
+     *                  generation could never be invalidated by an insert
+     */
+    public function getTableGeneration(string $tableName): ?int;
+
+    public function incrementTableGeneration(string $tableName): void;
 }

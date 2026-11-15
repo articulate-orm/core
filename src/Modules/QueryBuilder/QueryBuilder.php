@@ -921,7 +921,7 @@ class QueryBuilder {
         // non-null $cacheKey below is this method's single "is this call cache
         // eligible" flag for the rest of the method.
         $cacheKey = $this->isCacheEligible($usesDefaultHydration, $targetClass)
-            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params)
+            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, $this->resolveTableName($targetClass))
             : null;
 
         if ($cacheKey !== null) {

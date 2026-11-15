@@ -36,7 +36,7 @@ class ValidateCommand extends Command {
             'lenient',
             null,
             InputOption::VALUE_NONE,
-            'Downgrade the missing-#[VersionAware]-acknowledgement error to a warning (rival-counters errors are unaffected).'
+            'Downgrade the missing-#[VersionAware]-acknowledgement error to a warning; every other version-guard error stays an error.'
         );
     }
 

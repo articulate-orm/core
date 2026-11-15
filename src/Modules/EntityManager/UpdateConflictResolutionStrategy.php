@@ -6,8 +6,11 @@ use Articulate\Schema\EntityMetadataRegistry;
 
 interface UpdateConflictResolutionStrategy {
     /**
-     * @param array<int, array{entity: object, changes: array}|array{table: string, set: array<string, mixed>, where: string, whereValues: array<int, mixed>}> $updates
-     * @return array<int, array{entity: object, changes: array}|array{table: string, set: array<string, mixed>, where: string, whereValues: array<int, mixed>}>
+     * A merged update without `entity` is still executed, but its row is not evicted from the second-level cache
+     * nor from reverse-indexed query-cache entries — cached `cacheable()` results for that row stay stale until TTL.
+     *
+     * @param array<int, array{entity: object, changes: array}> $updates
+     * @return array<int, array{entity: object, changes: array}|array{table: string, entity?: object, set: array<string, mixed>, where: string, whereValues: array<int, mixed>}>
      */
     public function resolve(array $updates, EntityMetadataRegistry $metadataRegistry): array;
 }

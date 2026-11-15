@@ -4,6 +4,7 @@ namespace Articulate\Modules\QueryBuilder;
 
 use Articulate\Connection;
 use Articulate\Exceptions\TransactionRequiredException;
+use Articulate\Schema\CachedEntityResolverInterface;
 use Articulate\Schema\EntityMetadata;
 use Articulate\Schema\EntityMetadataRegistry;
 use Articulate\Schema\HydratorInterface;
@@ -29,7 +30,8 @@ class QueryResultExecutor {
         ?int $offset,
         array $orderBy,
         array $groupBy,
-        array $having
+        array $having,
+        ?CachedEntityResolverInterface $rowCacheResolver = null,
     ): mixed {
         if ($lockForUpdate && !$this->connection->inTransaction()) {
             throw new TransactionRequiredException('lock() requires an active transaction');
@@ -83,46 +85,98 @@ class QueryResultExecutor {
             return [];
         }
 
-        return $this->hydrateResults($rawResults, $entityClass);
+        return $this->hydrateResults($rawResults, $entityClass, $rowCacheResolver);
     }
 
-    private function hydrateResults(array $rawResults, ?string $entityClass): mixed
+    private function hydrateResults(array $rawResults, ?string $entityClass, ?CachedEntityResolverInterface $rowCacheResolver = null): mixed
     {
-        if ($entityClass && $this->hydrator) {
-            $metadata = null;
-            if ($this->managedEntityStore !== null && $this->metadataRegistry !== null) {
-                try {
-                    $metadata = $this->metadataRegistry->getMetadata($entityClass);
-                } catch (\InvalidArgumentException) {
-                    $metadata = null;
-                }
-            }
-
-            $entities = [];
-
-            foreach ($rawResults as $row) {
-                if ($metadata !== null) {
-                    $managedEntity = $this->getManagedEntity($entityClass, $metadata, $row);
-                    if ($managedEntity !== null) {
-                        $entities[] = $managedEntity;
-
-                        continue;
-                    }
-                }
-
-                $entity = $this->hydrator->hydrate($entityClass, $row);
-
-                if (is_object($entity) && $this->managedEntityStore !== null) {
-                    $this->managedEntityStore->registerManaged($entity, $row);
-                }
-
-                $entities[] = $entity;
-            }
-
-            return $entities;
+        if (!$entityClass || !$this->hydrator) {
+            return $rawResults;
         }
 
-        return $rawResults;
+        $metadata = $this->resolveMetadata($entityClass);
+        $entities = [];
+        $freshRows = [];
+
+        foreach ($rawResults as $row) {
+            $managedEntity = $metadata !== null && $this->managedEntityStore !== null
+                ? $this->getManagedEntity($entityClass, $metadata, $row)
+                : null;
+            if ($managedEntity !== null) {
+                $entities[] = $managedEntity;
+
+                continue;
+            }
+
+            $entity = $this->hydrator->hydrate($entityClass, $row);
+            if (is_object($entity)) {
+                $this->managedEntityStore?->registerManaged($entity, $row);
+                $freshRows[] = $row;
+            }
+
+            $entities[] = $entity;
+        }
+
+        if ($freshRows !== [] && $rowCacheResolver !== null && $metadata !== null) {
+            $this->cacheFreshRows($rowCacheResolver, $entityClass, $metadata, $freshRows);
+        }
+
+        return $entities;
+    }
+
+    private function resolveMetadata(string $entityClass): ?EntityMetadata
+    {
+        try {
+            return $this->metadataRegistry?->getMetadata($entityClass);
+        } catch (\InvalidArgumentException) {
+            return null;
+        }
+    }
+
+    /**
+     * Fresh rows loaded for a cacheable() collection query are also written to
+     * the per-entity second-level cache, so a later cache hit's id-list can
+     * resolve them via CachedEntityResolverInterface without a database read.
+     * Only single-column primary keys are supported, and a row is skipped when
+     * it carries columns outside the entity's own mapping (JOINs, extra
+     * selects): those may shadow same-named entity columns and must never end
+     * up in the per-entity cache.
+     *
+     * @param list<array<string, mixed>> $rows
+     */
+    private function cacheFreshRows(CachedEntityResolverInterface $rowCacheResolver, string $entityClass, EntityMetadata $metadata, array $rows): void
+    {
+        $primaryKeyColumns = $metadata->getPrimaryKeyColumns();
+        if (count($primaryKeyColumns) !== 1) {
+            return;
+        }
+
+        $ownColumns = $this->ownColumnNames($metadata);
+        $pairs = [];
+        foreach ($rows as $row) {
+            if (!array_key_exists($primaryKeyColumns[0], $row) || array_diff(array_keys($row), $ownColumns) !== []) {
+                continue;
+            }
+
+            $pairs[] = [$row[$primaryKeyColumns[0]], $row];
+        }
+
+        if ($pairs !== []) {
+            $rowCacheResolver->cacheResolvedRows($entityClass, $pairs);
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function ownColumnNames(EntityMetadata $metadata): array
+    {
+        $columns = $metadata->getColumnNames();
+        foreach ($metadata->getColumnRelations() as $relation) {
+            $columns[] = $relation->getColumnName();
+        }
+
+        return $columns;
     }
 
     private function getManagedEntity(string $entityClass, EntityMetadata $metadata, array $row): ?object

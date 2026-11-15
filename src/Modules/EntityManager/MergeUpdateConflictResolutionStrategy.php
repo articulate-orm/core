@@ -12,12 +12,6 @@ class MergeUpdateConflictResolutionStrategy implements UpdateConflictResolutionS
         $combinedIndexes = [];
 
         foreach ($updates as $update) {
-            if (isset($update['table'])) {
-                $result[] = $update;
-
-                continue;
-            }
-
             $entity = $update['entity'];
             $metadata = $metadataRegistry->getMetadata($entity::class);
 
@@ -36,9 +30,8 @@ class MergeUpdateConflictResolutionStrategy implements UpdateConflictResolutionS
 
             [$whereClause, $whereValues, $identityKey] = $identity;
             $columnChanges = $this->mapChangesToColumns($update['changes'], $metadata);
-            $versionBumpColumns = $metadata->getVersionColumns();
 
-            if ($columnChanges === [] && $versionBumpColumns === []) {
+            if ($columnChanges === []) {
                 $result[] = $update;
 
                 continue;
@@ -55,7 +48,6 @@ class MergeUpdateConflictResolutionStrategy implements UpdateConflictResolutionS
                     'set' => $columnChanges,
                     'where' => $whereClause,
                     'whereValues' => $whereValues,
-                    'versionBumpColumns' => $versionBumpColumns,
                 ];
 
                 continue;
@@ -63,13 +55,6 @@ class MergeUpdateConflictResolutionStrategy implements UpdateConflictResolutionS
 
             $index = $combinedIndexes[$groupKey];
             $result[$index]['set'] = array_merge($result[$index]['set'], $columnChanges);
-            // Two siblings may both bump the same raw column (design explicitly allows this) —
-            // dedupe by column name, else array_merge would emit "col = col + 1" twice and
-            // double-increment it in a single flush.
-            $result[$index]['versionBumpColumns'] = array_values(array_unique(array_merge(
-                $result[$index]['versionBumpColumns'],
-                $versionBumpColumns
-            )));
         }
 
         return $result;

@@ -50,20 +50,6 @@ class MergeUpdateConflictResolutionStrategyTest extends TestCase {
         $this->strategy = new MergeUpdateConflictResolutionStrategy();
     }
 
-    public function testPassesThroughRawTableUpdates(): void
-    {
-        $rawUpdate = [
-            'table' => 'some_table',
-            'set' => ['name' => 'value'],
-            'where' => 'id = ?',
-            'whereValues' => [1],
-        ];
-
-        $result = $this->strategy->resolve([$rawUpdate], $this->entityManager->getMetadataRegistry());
-
-        $this->assertSame([$rawUpdate], $result);
-    }
-
     public function testPassesThroughUpdateWhenEntityHasNullPrimaryKey(): void
     {
         $entity = new MergeConflictEntity();
@@ -141,32 +127,6 @@ class MergeUpdateConflictResolutionStrategyTest extends TestCase {
         $this->assertArrayHasKey('set', $result[0]);
         $this->assertStringContainsString('id', $result[0]['where']);
         $this->assertContains(42, $result[0]['whereValues']);
-    }
-
-    public function testMixedRawAndEntityUpdatesArePreservedCorrectly(): void
-    {
-        $entity = new MergeConflictEntity();
-        $entity->id = 5;
-
-        $rawUpdate = [
-            'table' => 'other_table',
-            'set' => ['col' => 'val'],
-            'where' => 'id = ?',
-            'whereValues' => [99],
-        ];
-
-        $updates = [
-            ['entity' => $entity, 'changes' => ['name' => 'First']],
-            $rawUpdate,
-            ['entity' => $entity, 'changes' => ['status' => 'merged']],
-        ];
-
-        $result = $this->strategy->resolve($updates, $this->entityManager->getMetadataRegistry());
-
-        $this->assertCount(2, $result);
-        $this->assertSame('First', $result[0]['set']['name']);
-        $this->assertSame('merged', $result[0]['set']['status']);
-        $this->assertSame($rawUpdate, $result[1]);
     }
 
     // ── Fallback id-property path mutation killers ────────

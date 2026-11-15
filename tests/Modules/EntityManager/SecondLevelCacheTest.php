@@ -221,6 +221,33 @@ class FailingBatchCache extends L2ArrayCache {
     }
 }
 
+class CountingL2ArrayCache extends L2ArrayCache {
+    public int $getItemCalls = 0;
+
+    public int $getItemsCalls = 0;
+
+    public function getItem(string $key): CacheItemInterface
+    {
+        $this->getItemCalls++;
+
+        return parent::getItem($key);
+    }
+
+    /**
+     * @return array<string, CacheItemInterface>
+     */
+    public function getItems(array $keys = []): iterable
+    {
+        $this->getItemsCalls++;
+        $items = [];
+        foreach ($keys as $key) {
+            $items[$key] = parent::getItem($key);
+        }
+
+        return $items;
+    }
+}
+
 class SecondLevelCacheTest extends DatabaseTestCase {
     #[DataProvider('databaseProvider')]
     public function testFindPopulatesCache(string $databaseName): void
@@ -613,6 +640,75 @@ class SecondLevelCacheTest extends DatabaseTestCase {
         $cache = new SecondLevelCache(new FailingBatchCache());
 
         $this->assertSame([null, null], $cache->getMany(L2CacheUser::class, [1, 2]));
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testFindWithStringIdIsEvictedOnFlush(string $databaseName): void
+    {
+        $this->setCurrentDatabase($this->getConnection($databaseName), $databaseName);
+        $connection = $this->getCurrentConnection();
+        $this->createUserTable($connection, $databaseName);
+
+        $connection->executeQuery("INSERT INTO l2_cache_users (name) VALUES ('Bob')");
+        $id = (string) $connection->lastInsertId($databaseName === 'pgsql' ? 'l2_cache_users_id_seq' : null);
+
+        $em = new EntityManager($connection, secondLevelCache: new L2ArrayCache());
+
+        // A route parameter arrives as a string while the #[PrimaryKey] property is int.
+        $user = $em->find(L2CacheUser::class, $id);
+        $user->name = 'Changed';
+        $em->flush();
+        $em->clear();
+
+        $this->assertSame('Changed', $em->find(L2CacheUser::class, $id)->name);
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testFindWithStringIdHitsEntryCachedUnderIntId(string $databaseName): void
+    {
+        $this->setCurrentDatabase($this->getConnection($databaseName), $databaseName);
+        $connection = $this->getCurrentConnection();
+        $this->createUserTable($connection, $databaseName);
+
+        $connection->executeQuery("INSERT INTO l2_cache_users (name) VALUES ('Bob')");
+        $id = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'l2_cache_users_id_seq' : null);
+
+        $em = new EntityManager($connection, secondLevelCache: new L2ArrayCache());
+        $em->find(L2CacheUser::class, $id);
+        $connection->executeQuery("UPDATE l2_cache_users SET name = 'Changed' WHERE id = ?", [$id]);
+        $em->clear();
+
+        $this->assertSame('Bob', $em->find(L2CacheUser::class, (string) $id)->name);
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testResultCacheAloneDoesNotEnableEntityCache(string $databaseName): void
+    {
+        $this->setCurrentDatabase($this->getConnection($databaseName), $databaseName);
+        $connection = $this->getCurrentConnection();
+        $this->createUserTable($connection, $databaseName);
+
+        $connection->executeQuery("INSERT INTO l2_cache_users (name) VALUES ('Bob')");
+        $id = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'l2_cache_users_id_seq' : null);
+
+        $em = new EntityManager($connection, resultCache: new L2ArrayCache());
+        $em->find(L2CacheUser::class, $id);
+        $connection->executeQuery("UPDATE l2_cache_users SET name = 'Changed' WHERE id = ?", [$id]);
+        $em->clear();
+
+        $this->assertSame('Changed', $em->find(L2CacheUser::class, $id)->name);
+    }
+
+    public function testSetManyFetchesAllItemsInOneBatch(): void
+    {
+        $pool = new CountingL2ArrayCache();
+        $cache = new SecondLevelCache($pool);
+
+        $cache->setMany(L2CacheUser::class, [[1, ['name' => 'a']], [2, ['name' => 'b']], [3, ['name' => 'c']]]);
+
+        $this->assertSame(0, $pool->getItemCalls);
+        $this->assertSame(1, $pool->getItemsCalls);
+        $this->assertSame([['name' => 'a'], ['name' => 'b'], ['name' => 'c']], $cache->getMany(L2CacheUser::class, [1, 2, 3]));
     }
 
     public function testSetManyIsGracefulOnBackendFailure(): void

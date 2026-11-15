@@ -308,20 +308,12 @@ Request B: identity map miss → L2 cache hit → DB skipped entirely
 Request C: identity map miss → L2 cache hit → DB skipped entirely
 ```
 
-Pass any PSR-6 pool to `EntityManager`. If no dedicated pool is given, it falls back to the result cache pool automatically.
+Pass a PSR-6 pool as `secondLevelCache:` to enable it. Without it, `find()` is never cached — `resultCache:` alone only backs `enableResultCache()`. Both options may point at the same pool.
 
 ```php
 $em = new EntityManager(
     $connection,
-    resultCache: $cachePool,           // also backs L2 cache unless overridden
-    secondLevelCacheTtl: 3600,
-);
-
-// Or with a dedicated L2 pool:
-$em = new EntityManager(
-    $connection,
-    resultCache: $queryPool,
-    secondLevelCache: $entityPool,     // separate backend for entity cache
+    secondLevelCache: $entityPool,
     secondLevelCacheTtl: 3600,
 );
 ```

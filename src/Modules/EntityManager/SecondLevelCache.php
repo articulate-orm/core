@@ -61,10 +61,13 @@ class SecondLevelCache {
     public function setMany(string $class, array $idRowPairs): void
     {
         try {
+            $rowsByKey = [];
             foreach ($idRowPairs as [$id, $data]) {
-                $item = $this->pool->getItem($this->generateKey($class, $id));
-                $item->set($data)->expiresAfter($this->defaultTtl);
-                $this->pool->saveDeferred($item);
+                $rowsByKey[$this->generateKey($class, $id)] = $data;
+            }
+
+            foreach ($this->pool->getItems(array_keys($rowsByKey)) as $key => $item) {
+                $this->pool->saveDeferred($item->set($rowsByKey[$key])->expiresAfter($this->defaultTtl));
             }
 
             $this->pool->commit();

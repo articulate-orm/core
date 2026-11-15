@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All collection-cache keys (`l2q_`, `l2qidx_`) contain only PSR-6-safe characters (no `:`), so
   strict pools such as Symfony Cache accept them.
 - `symfony/cache` added as a dev dependency (PSR-6 key validation in tests).
+- **Changed:** the per-entity second-level cache is enabled only by `secondLevelCache:`. It no longer
+  falls back to the `resultCache:` pool, so configuring `resultCache:` alone leaves `find()` uncached.
+  Pass the same pool as `secondLevelCache:` to keep the previous behaviour.
+- **Fixed:** `find()` with an id whose PHP type differs from the primary-key property (e.g. a string
+  route parameter for an `int` id) cached the row under a key `flush()` never evicted, serving stale
+  data until TTL. Ids are now canonicalized to the primary-key property's type before keying.
+- `SecondLevelCache::setMany()` fetches all items with one `getItems()` call instead of one
+  `getItem()` per row, cutting a `cacheable()` miss from N+1 to a constant number of round trips.
 
 ## [2.0.0]
 

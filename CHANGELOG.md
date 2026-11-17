@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every table reached via `join`/`leftJoin`/`rightJoin`/`crossJoin` (alias stripped, self-join counted
   once), read in one batched pool call, so a write to a joined table invalidates the list. Trade-off:
   more writes now evict a joined list, lowering its hit rate. Subquery tables are not covered yet.
+- `cacheable(?int $ttl = null, array $dependsOn = [])`: declare extra dependency tables by name for
+  reads the builder can't detect (`whereRaw`, raw join conditions). Merged and deduplicated with
+  detected tables (declaring one already detected keeps the same key) and kept across `resetJoins()`.
+  Undeclared raw-SQL dependencies are not detected.
 - **Fixed:** an entity query with joins now qualifies its default column list with the FROM table or
   alias, so columns shared with a joined table (or a self-join) are no longer ambiguous.
 - All collection-cache keys (`l2q_`, `l2qgen_`) contain only PSR-6-safe characters (no `:`), so

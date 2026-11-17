@@ -162,12 +162,13 @@ Contract — read before relying on it:
 
 ### Collection Cache
 
-`QueryBuilder::cacheable(?int $ttl)` caches the ordered **id-list** a query matched (never row data) in the second-level cache pool via `CollectionCache` (`src/Modules/Cache/`); a hit resolves entities through the identity map / `SecondLevelCache`. Only applies to default object hydration of an entity with a single-column primary key. Invalidation is by **table generation** (terms in `CONTEXT.md`).
+`QueryBuilder::cacheable(?int $ttl, array $dependsOn = [])` caches the ordered **id-list** a query matched (never row data) in the second-level cache pool via `CollectionCache` (`src/Modules/Cache/`); a hit resolves entities through the identity map / `SecondLevelCache`. Only applies to default object hydration of an entity with a single-column primary key. Invalidation is by **table generation** (terms in `CONTEXT.md`).
 
 Contract — read before relying on it:
 - **Any write to the root table invalidates.** Each key folds in the root table's generation. A flush bumps it once per written table, for inserts, entity updates, merged updates, hard deletes and soft deletes — however many rows, through whichever sibling slice. Old lists stop matching and age out via TTL. This covers an UPDATE moving a row into or out of a cached predicate.
 - **Coarse by design.** Any write to a table evicts every list cached against it. Correctness over hit rate; choose which queries are worth caching.
 - **Joined tables are dependency tables.** Every table reached through `join`/`leftJoin`/`rightJoin`/`crossJoin` adds its generation to the key (alias stripped, self-join counted once), so a write to it invalidates the list too. Trade-off: the list now misses on writes to any of those tables, so a join against a busy table lowers the hit rate. Collection lives in `DependencyTables` (`src/Modules/QueryBuilder/`). Subquery tables are not covered yet.
+- **Declared dependency tables.** `cacheable(dependsOn: ['table', ...])` adds tables the builder can't detect (`whereRaw`, raw join conditions) by name. They are merged and deduplicated with detected ones (declaring a detected table keeps the same key) and survive `resetJoins()`; only `reset()` drops them. Undeclared raw-SQL dependencies are not detected, so a write to them leaves the list stale until TTL.
 - **Joins qualify the default select.** With any join, an entity query's default column list is prefixed with the FROM table/alias, so shared column names (and self-joins) are not ambiguous.
 - **Unit-of-work writes only.** `QueryBuilder` DML and raw SQL do not bump generations.
 - **Shared across contexts.** Generations live in the shared pool, so a write in one `EntityManager` invalidates lists every context reads (unlike per-entity eviction).

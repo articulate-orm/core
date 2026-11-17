@@ -11,6 +11,9 @@ class DependencyTables {
     /** @var array<string, true> */
     private array $tables = [];
 
+    /** @var array<string, true> declared via cacheable(dependsOn:), so they survive resetJoins() */
+    private array $declared = [];
+
     public function add(string $table): void
     {
         $this->tables[$table] = true;
@@ -22,9 +25,19 @@ class DependencyTables {
         $this->add(preg_split('/\s+/', trim($tableWithOptionalAlias), 2)[0]);
     }
 
+    public function declare(string $table): void
+    {
+        $this->declared[$table] = true;
+    }
+
     public function clear(): void
     {
         $this->tables = [];
+    }
+
+    public function clearDeclared(): void
+    {
+        $this->declared = [];
     }
 
     /**
@@ -32,7 +45,7 @@ class DependencyTables {
      */
     public function withRoot(string $rootTable): array
     {
-        $tables = array_keys([$rootTable => true] + $this->tables);
+        $tables = array_keys([$rootTable => true] + $this->tables + $this->declared);
         sort($tables);
 
         return $tables;

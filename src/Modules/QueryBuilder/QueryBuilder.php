@@ -358,6 +358,7 @@ class QueryBuilder {
         $this->having = [];
         $this->joins = [];
         $this->dependencyTables->clear();
+        $this->dependencyTables->clearDeclared();
         $this->orderBy = [];
         $this->groupBy = [];
         $this->limit = null;
@@ -668,11 +669,18 @@ class QueryBuilder {
      * matching.
      *
      * Omitted $ttl falls back to the owning EntityManager's configured
-     * secondLevelCacheTtl.
+     * secondLevelCacheTtl. $dependsOn declares extra dependency tables by
+     * name for reads the builder can't detect (whereRaw, raw join
+     * conditions); undeclared raw-SQL dependencies are not invalidated on.
+     *
+     * @param list<string> $dependsOn
      */
-    public function cacheable(?int $ttl = null): self
+    public function cacheable(?int $ttl = null, array $dependsOn = []): self
     {
         $this->secondLevelCache->enable($ttl);
+        foreach ($dependsOn as $table) {
+            $this->dependencyTables->declare($table);
+        }
 
         return $this;
     }

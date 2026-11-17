@@ -39,6 +39,9 @@ class QueryBuilder {
 
     private DependencyTables $dependencyTables;
 
+    // kept apart from the join tables so resetJoins() does not drop them
+    private DependencyTables $subqueryTables;
+
     private bool $distinct = false;
 
     private ?string $rawSql = null;
@@ -110,10 +113,11 @@ class QueryBuilder {
         $this->resultExecutor = new QueryResultExecutor($connection, $this->resultCache, $hydrator, null, $metadataRegistry);
         $this->dmlHandler = new DmlOperationHandler($metadataRegistry);
         $this->whereBuilder = new WhereClauseBuilder(
-            fn () => $this->createSubQueryBuilder(),
+            fn () => $this->createGroupBuilder(),
             $this->sqlCompiler
         );
         $this->dependencyTables = new DependencyTables();
+        $this->subqueryTables = new DependencyTables();
         $this->secondLevelCache = new QueryResultSecondLevelCache($collectionCache, $connection->getCacheNamespace());
         $this->cachedEntityResolver = $cachedEntityResolver;
         $this->secondLevelCacheDefaultTtl = $secondLevelCacheDefaultTtl;
@@ -126,6 +130,24 @@ class QueryBuilder {
         $subBuilder->disabledFilters = $this->disabledFilters;
 
         return $subBuilder;
+    }
+
+    // a where-group's subqueries are read by this query, so the group records them here
+    private function createGroupBuilder(): QueryBuilder
+    {
+        $groupBuilder = $this->createSubQueryBuilder();
+        $groupBuilder->subqueryTables = $this->subqueryTables;
+
+        return $groupBuilder;
+    }
+
+    private function embedSubquery(QueryBuilder $subquery): void
+    {
+        if ($subquery->from !== '') {
+            $this->subqueryTables->addJoinTarget($subquery->from);
+        }
+        $this->subqueryTables->merge($subquery->dependencyTables);
+        $this->subqueryTables->merge($subquery->subqueryTables);
     }
 
     public function withoutFilter(string $name): self
@@ -171,6 +193,9 @@ class QueryBuilder {
 
     public function whereIn(string $column, array|QueryBuilder $values): self
     {
+        if ($values instanceof QueryBuilder) {
+            $this->embedSubquery($values);
+        }
         $this->whereBuilder->whereIn($column, $values);
 
         return $this;
@@ -178,6 +203,9 @@ class QueryBuilder {
 
     public function whereNotIn(string $column, array|QueryBuilder $values): self
     {
+        if ($values instanceof QueryBuilder) {
+            $this->embedSubquery($values);
+        }
         $this->whereBuilder->whereNotIn($column, $values);
 
         return $this;
@@ -199,6 +227,7 @@ class QueryBuilder {
 
     public function whereExists(QueryBuilder $subquery): self
     {
+        $this->embedSubquery($subquery);
         $this->whereBuilder->whereExists($subquery);
 
         return $this;
@@ -220,6 +249,7 @@ class QueryBuilder {
 
     public function orWhereExists(QueryBuilder $subquery): self
     {
+        $this->embedSubquery($subquery);
         $this->whereBuilder->orWhereExists($subquery);
 
         return $this;
@@ -358,6 +388,7 @@ class QueryBuilder {
         $this->having = [];
         $this->joins = [];
         $this->dependencyTables->clear();
+        $this->subqueryTables->clear();
         $this->orderBy = [];
         $this->groupBy = [];
         $this->limit = null;
@@ -932,7 +963,7 @@ class QueryBuilder {
         // non-null $cacheKey below is this method's single "is this call cache
         // eligible" flag for the rest of the method.
         $cacheKey = $this->isCacheEligible($usesDefaultHydration, $targetClass)
-            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, $this->dependencyTables->withRoot($this->resolveTableName($targetClass)))
+            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, $this->tablesRead($this->resolveTableName($targetClass)))
             : null;
 
         if ($cacheKey !== null) {
@@ -1168,6 +1199,17 @@ class QueryBuilder {
         [$sql, $params] = $this->expandInPlaceholders($sql, $params);
 
         return $this->connection->executeQuery($sql, $params)->rowCount();
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function tablesRead(string $rootTable): array
+    {
+        $tables = clone $this->dependencyTables;
+        $tables->merge($this->subqueryTables);
+
+        return $tables->withRoot($rootTable);
     }
 
     private function resolveTableName(string $entityClass): string

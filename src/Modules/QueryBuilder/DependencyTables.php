@@ -22,6 +22,11 @@ class DependencyTables {
         $this->add(preg_split('/\s+/', trim($tableWithOptionalAlias), 2)[0]);
     }
 
+    public function merge(self $other): void
+    {
+        $this->tables += $other->tables;
+    }
+
     public function clear(): void
     {
         $this->tables = [];

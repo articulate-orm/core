@@ -333,6 +333,8 @@ $active = $em->createQueryBuilder(User::class)
 
 Invalidation is coarse: every table has a **table generation** counter, bumped once per `flush()` that inserts, updates, deletes or soft-deletes rows in it. A cached list is keyed by its root table's generation, so any such write makes it stop matching, including updates that move a row into or out of the predicate. Writes to other tables keep it a hit. Not covered: changes to joined tables (for now), and writes made through `QueryBuilder` DML or raw SQL.
 
+The bump happens after `flush()` commits its own transaction, so concurrent readers never re-cache pre-commit rows under the new generation, and a flush that fails bumps nothing. If you call `flush()` inside your own transaction, the bump happens when `flush()` returns, before your COMMIT, so a reader in that window can still cache rows that are not committed yet.
+
 ### Query Result Cache
 
 Cache raw result sets from `QueryBuilder` queries. Useful for read-heavy queries that don't change often.

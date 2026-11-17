@@ -284,9 +284,9 @@ class EntityCacheCoordinatorTest extends TestCase {
         foreach (['inserts', 'deletes', 'softDeletes'] as $kind) {
             $changes = ['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => []];
             $changes[$kind] = [$this->product(1)];
-            $coordinator->invalidateSecondLevelCache($changes);
+            $coordinator->bumpWrittenTableGenerations($changes);
         }
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($this->product(1), [])], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->bumpWrittenTableGenerations(['inserts' => [], 'updates' => [new EntityUpdate($this->product(1), [])], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame([['ecc_products'], ['ecc_products'], ['ecc_products'], ['ecc_products']], $collectionCache->incrementCalls);
     }
@@ -296,7 +296,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
         $coordinator = new EntityCacheCoordinator(null, new EntityMetadataRegistry(), collectionCache: $collectionCache);
 
-        $coordinator->invalidateSecondLevelCache([
+        $coordinator->bumpWrittenTableGenerations([
             'inserts' => [],
             'updates' => [new MergedUpdate('ecc_products', null, ['name' => 'x'], 'id = ?', [1])],
             'deletes' => [],
@@ -314,7 +314,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $summary = new EccProductSummary();
         $summary->id = 2;
 
-        $coordinator->invalidateSecondLevelCache([
+        $coordinator->bumpWrittenTableGenerations([
             'inserts' => [new EccProduct(), new EccProduct(), new EccOrder()],
             'updates' => [new EntityUpdate($summary, []), new MergedUpdate('ecc_products', null, [], 'id = ?', [3])],
             'deletes' => [$this->product(4)],
@@ -333,7 +333,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
         $coordinator = new EntityCacheCoordinator(null, new EntityMetadataRegistry(), collectionCache: $collectionCache);
 
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->bumpWrittenTableGenerations(['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => []]);
 
         $this->assertSame([], $collectionCache->incrementCalls);
     }

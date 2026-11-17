@@ -27,18 +27,19 @@ see ADRs under https://articulate-orm.github.io/reference/ (source: `articulate-
   Caches raw SQL result rows keyed by SQL text + bound params, with no entity-identity awareness.
   Invalidated by a single global generation counter bumped on every flush — distinct mechanism
   from both caches above, not touched by the collection-cache feature.
-- **Reverse index**: `entityId -> [cacheKey, ...]` mapping maintained by the collection cache so
-  that, when an entity changes or is deleted, every cached query result that contained it can be
-  evicted exactly — without re-evaluating any query's WHERE clause.
-- **Per-table generation counter**: A counter, one per database table, folded into every
-  collection-cache key as `tableName:generation`. Bumped whenever a row is inserted into that
-  table. Exists because an *insert* that should now match a previously-cached query can't be
-  detected by exact invalidation (no row identity to look up in the reverse index yet) — bumping
-  the counter makes the old cache key stop matching, so the next read is a natural cache miss
-  rather than a stale hit.
+- **Root table**: The table of the entity a cacheable query hydrates — the one whose ids the
+  cached list holds.
+- **Dependency table**: Any table other than the root table that a cacheable query reads —
+  through a join or a subquery — or that the caller declares as one. Its rows shape *which*
+  root ids match, but none of its ids appear in the cached list.
+- **Table generation**: A counter, one per database table, bumped once per flush by any insert,
+  update or delete to that table. A cached list is keyed by the generation of its root table and
+  of every dependency table, so any write to any table the query read makes the list stop
+  matching — it ages out via TTL. Coarse by design: correctness over hit rate.
+  Avoid: reverse index, insert generation, per-table generation counter (superseded mechanisms).
 - **Slices in the caches**: Sibling slices sharing a table/PK resolve to the same cache identity
-  in both the entity cache and the collection cache's reverse index — no separate handling needed
-  for this case in either cache.
+  in the entity cache, and share one table generation in the collection cache — no separate
+  handling needed for this case in either cache.
 
 ## Flush
 

@@ -4,6 +4,7 @@ namespace Articulate\Modules\EntityManager;
 
 use Articulate\Connection;
 use Articulate\Modules\Cache\CollectionCache;
+use Articulate\Modules\Cache\CollectionCacheInterface;
 use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Modules\Generators\GeneratorRegistry;
 use Articulate\Modules\QueryBuilder\Filter\FilterCollection;
@@ -50,6 +51,8 @@ class EntityManager {
 
     private EntityRefreshService $refreshService;
 
+    private QueryExecutor $queryExecutor;
+
     public function __construct(
         Connection $connection,
         ?ChangeTrackingStrategy $changeTrackingStrategy = null,
@@ -79,7 +82,7 @@ class EntityManager {
         // Initialize change aggregator and query executor
         $this->updateConflictResolutionStrategy = $updateConflictResolutionStrategy ?? new MergeUpdateConflictResolutionStrategy();
         $this->changeAggregator = new ChangeAggregator($this->metadataRegistry, $this->updateConflictResolutionStrategy, $logger);
-        $queryExecutor = $queryExecutor ?? new QueryExecutor($this->connection, $this->generatorRegistry);
+        $this->queryExecutor = $queryExecutor ?? new QueryExecutor($this->connection, $this->generatorRegistry);
 
         $this->unitOfWorkRegistry = new UnitOfWorkRegistry(
             $changeTrackingStrategy,
@@ -109,7 +112,7 @@ class EntityManager {
             : new NullCollectionCache();
         $this->cacheCoordinator = new EntityCacheCoordinator($resultCache, $this->metadataRegistry, $secondLevelCache, $secondLevelCacheTtl, $this->connection->getCacheNamespace(), $collectionCache, $typeRegistry);
         $this->dependencySorter = new EntityDependencySorter($this->metadataRegistry);
-        $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->metadataRegistry, $this->dependencySorter);
+        $this->changeSetExecutor = new ChangeSetExecutor($this->queryExecutor, $this->metadataRegistry, $this->dependencySorter);
         $this->readService = new EntityReadService(
             $this->connection,
             $this->hydrator,
@@ -153,6 +156,9 @@ class EntityManager {
 
         /** @var list<VersionedRowWriteHandle> $versionedRowWrites */
         $versionedRowWrites = [];
+        $writtenMappingTables = [];
+        // Drop mapping tables recorded by an earlier failed flush or outside any flush.
+        $this->queryExecutor->takeWrittenMappingTables();
 
         try {
             $unitOfWorks = $this->unitOfWorkRegistry->all();
@@ -165,6 +171,7 @@ class EntityManager {
             $aggregatedChanges = $this->changeAggregator->aggregateChanges($unitOfWorks);
             $versionedRowWrites = $this->changeSetExecutor->execute($aggregatedChanges);
             $this->changeSetExecutor->syncManagedManyToMany($unitOfWorks);
+            $writtenMappingTables = $this->queryExecutor->takeWrittenMappingTables();
             $this->cacheCoordinator->invalidateSecondLevelCache($aggregatedChanges);
             $this->cacheCoordinator->incrementQueryCacheGeneration();
 
@@ -196,6 +203,10 @@ class EntityManager {
 
             throw $e;
         }
+
+        // Outside the try: the rows are committed (or handed back to the caller's
+        // transaction), so a bump must never trigger a rollback.
+        $this->cacheCoordinator->bumpWrittenTableGenerations($aggregatedChanges, $writtenMappingTables);
     }
 
     public function clear(): void
@@ -352,6 +363,26 @@ class EntityManager {
     public function getFilters(): FilterCollection
     {
         return $this->filters;
+    }
+
+    /**
+     * Invalidates every cacheable() id-list that read any of these tables,
+     * for writes the unit of work never sees (raw SQL, another process).
+     * Shared across contexts, like flush-time invalidation.
+     */
+    public function invalidateTables(string ...$tables): void
+    {
+        $this->cacheCoordinator->getCollectionCache()->incrementTableGenerations(array_values($tables));
+    }
+
+    /**
+     * Invalidates every cacheable() id-list cached under one of these names.
+     */
+    public function invalidateCacheNames(string ...$names): void
+    {
+        $this->cacheCoordinator->getCollectionCache()->incrementTableGenerations(
+            array_map(static fn (string $name): string => CollectionCacheInterface::NAME_PREFIX . $name, array_values($names))
+        );
     }
 
     public function createQueryBuilder(?string $entityClass = null): QueryBuilder

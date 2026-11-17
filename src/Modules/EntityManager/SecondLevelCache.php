@@ -90,10 +90,6 @@ class SecondLevelCache {
         return hash('sha256', $this->namespace . $class . ':' . $this->normalizeId($id));
     }
 
-    /**
-     * Delegates to the shared IdNormalizer so reverse-index keys built in the
-     * Cache module normalize identifiers identically to this per-entity region.
-     */
     private function normalizeId(mixed $id): string
     {
         return IdNormalizer::normalize($id);

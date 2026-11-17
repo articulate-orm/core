@@ -11,16 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second-level cache. The matched id-list is cached; entities resolve from the identity map or the
   per-entity second-level cache, and any unresolvable id discards the whole cached list and re-queries.
   Silent no-op without a configured `secondLevelCache` pool, for `lock()` queries, aggregates,
-  custom hydrators and composite primary keys. See [ADR 0002](https://articulate-orm.github.io/reference/adr-0002-collection-second-level-cache/).
+  custom hydrators and composite primary keys.
 - Second-level cache keys (collection and per-entity) are now namespaced per connection
   (`Connection::getCacheNamespace()`), so connections to different databases can share one pool
   safely. Existing per-entity entries are not reused after upgrading.
-- Exact invalidation: updating, deleting or soft-deleting a row evicts precisely the cached id-lists
-  that contain it, via a reverse index (`l2qidx_` + sha256 of connection namespace, table and
-  type-tagged id). A hit is cross-validated against the reverse index and discarded wholesale if
-  any entry is missing. Rows *inserted* after an id-list was cached still do not appear until it
-  expires.
-- All collection-cache keys (`l2q_`, `l2qidx_`) contain only PSR-6-safe characters (no `:`), so
+- Table-generation invalidation: every table has one generation counter (`l2qgen_` + sha256 of
+  connection namespace and table, randomly seeded). A flush bumps it once per written table, for
+  inserts, entity updates, merged updates, hard deletes and soft deletes. A cached id-list is keyed
+  by its root table's generation, so any such write makes it stop matching, including an update that
+  moves a row into or out of the cached predicate and a merged update across sibling slices.
+  `QueryBuilder` DML and raw SQL do not invalidate yet. Design:
+  [ADR-0003](https://articulate-orm.github.io/reference/adr-0003-collection-cache-table-generation-invalidation/).
+- Joined tables are dependency tables of a `cacheable()` query: the key folds in the generation of
+  every table reached via `join`/`leftJoin`/`rightJoin`/`crossJoin` (alias stripped, self-join counted
+  once), read in one batched pool call, so a write to a joined table invalidates the list. Trade-off:
+  more writes now evict a joined list, lowering its hit rate.
+- Subquery tables are dependency tables of a `cacheable()` query: a `QueryBuilder` subquery passed to
+  `whereExists`/`orWhereExists`/`whereIn`/`whereNotIn` contributes its own table, its joins, its own
+  `dependsOn` tables and its nested subqueries (recursively), so a write to any of them invalidates the list. Raw-SQL subqueries
+  are not detected.
+- `cacheable(?int $ttl = null, array $dependsOn = [])`: declare extra dependency tables by name for
+  reads the builder can't detect (`whereRaw`, raw join conditions). Merged and deduplicated with
+  detected tables (declaring one already detected keeps the same key) and kept across `resetJoins()`.
+  Undeclared raw-SQL dependencies are not detected.
+- Mapping (pivot) tables written by the unit of work bump their table generation once per flush:
+  pivot rows deleted along with a removed entity and many-to-many / morph-to-many collection sync
+  (inserts, pivot-data updates, deletes). A cached list joining a mapping table is invalidated.
+- **Fixed:** an entity query with joins now qualifies its default column list with the FROM table or
+  alias, so columns shared with a joined table (or a self-join) are no longer ambiguous.
+- All collection-cache keys (`l2q_`, `l2qgen_`) contain only PSR-6-safe characters (no `:`), so
   strict pools such as Symfony Cache accept them.
 - `symfony/cache` added as a dev dependency (PSR-6 key validation in tests).
 - **Changed:** the per-entity second-level cache is enabled only by `secondLevelCache:`. It no longer

@@ -69,7 +69,7 @@ Articulate is a context-bounded ORM for domain-driven PHP applications. PHP 8.4+
 | Database | `src/Modules/Database/` | Schema reader, type mappers per DB, schema comparator (diff engine) |
 | Repository | `src/Modules/Repository/` | AbstractRepository, EntityRepository, criteria pattern |
 | Migrations | `src/Modules/Migrations/` | Schema diff → migration SQL (MySQL & PostgreSQL generators) |
-| Cache | `src/Modules/Cache/` | Collection (query-region) cache storage: id-lists, reverse index, per-table insert generations |
+| Cache | `src/Modules/Cache/` | Collection (query-region) cache storage: id-lists and table generations |
 | Generators | `src/Modules/Generators/` | ID strategies: UUID v4/v7, ULID, AutoIncrement, Serial, Prefixed |
 | Attributes | `src/Attributes/` | All PHP attributes + reflection wrappers (ReflectionEntity, ReflectionProperty, ReflectionRelation) |
 | Schema | `src/Schema/` | EntityMetadata, EntityMetadataRegistry, naming conventions |
@@ -162,15 +162,23 @@ Contract — read before relying on it:
 
 ### Collection Cache
 
-`QueryBuilder::cacheable(?int $ttl)` caches the ordered **id-list** a query matched (never row data) in the second-level cache pool via `CollectionCache` (`src/Modules/Cache/`); a hit resolves entities through the identity map / `SecondLevelCache`. Only applies to default object hydration of an entity with a single-column primary key. Design: ADR-0002.
+`QueryBuilder::cacheable(?int $ttl, array $dependsOn = [])` caches the ordered **id-list** a query matched (never row data) in the second-level cache pool via `CollectionCache` (`src/Modules/Cache/`); a hit resolves entities through the identity map / `SecondLevelCache`. Only applies to default object hydration of an entity with a single-column primary key. Invalidation is by **table generation** (terms in `CONTEXT.md`). Design: ADR-0003 (supersedes ADR-0002).
 
 Contract — read before relying on it:
-- **Updates/deletes invalidate exactly.** A reverse index (table + id → cache keys) evicts only the lists containing the changed row, at `flush()`.
-- **Inserts invalidate by generation.** Each key folds in a per-table insert-generation counter; a flushed insert bumps it once per table, and old lists age out via TTL.
-- **Root table only.** A change to a joined/filtered-through table does not invalidate the list; neither does an UPDATE that moves a row *into* a cached predicate.
-- **Unit-of-work writes only.** `QueryBuilder` DML and raw SQL neither evict nor bump.
-- **Cost:** one extra `getItem()` per `cacheable()` query for the generation counter.
-- **Fail-open, with caveats.** A backend fault never breaks a query: an unreadable generation skips the cache for that call. But a failed eviction or bump during an outage leaves pre-change lists matchable after recovery until TTL, and eviction/bump run before COMMIT, so a concurrent reader can re-cache pre-commit state.
+- **Any write to the root table invalidates.** Each key folds in the root table's generation. A flush bumps it once per written table, for inserts, entity updates, merged updates, hard deletes and soft deletes — however many rows, through whichever sibling slice. Old lists stop matching and age out via TTL. This covers an UPDATE moving a row into or out of a cached predicate.
+- **Coarse by design.** Any write to a table evicts every list cached against it. Correctness over hit rate; choose which queries are worth caching.
+- **Joined tables are dependency tables.** Every table reached through `join`/`leftJoin`/`rightJoin`/`crossJoin` adds its generation to the key (alias stripped, self-join counted once), so a write to it invalidates the list too. Trade-off: the list now misses on writes to any of those tables, so a join against a busy table lowers the hit rate. Collection lives in `DependencyTables` (`src/Modules/QueryBuilder/`).
+- **Subquery tables are dependency tables.** A `QueryBuilder` subquery passed to `whereExists`/`orWhereExists`/`whereIn`/`whereNotIn` (also inside a `where(callable)` group) contributes its FROM table (alias stripped), its joins, its own `dependsOn` tables and its nested subqueries, recursively. They are captured when the subquery is embedded, so build it fully first, and live in their own `DependencyTables` bucket (joins / subqueries / declared), so `resetJoins()` does not drop them. Subqueries written as raw SQL strings are not detected.
+- **Declared dependency tables.** `cacheable(dependsOn: ['table', ...])` adds tables the builder can't detect (`whereRaw`, raw join conditions) by name. They are merged and deduplicated with detected ones (declaring a detected table keeps the same key) and survive `resetJoins()`; only `reset()` drops them. Undeclared raw-SQL dependencies are not detected, so a write to them leaves the list stale until TTL.
+- **Mapping tables count as written tables.** Pivot rows the unit of work writes (deleted along with a removed owner, or inserted/updated/deleted by many-to-many and morph-to-many collection sync) bump the mapping table's generation once per flush, so a list joining the mapping table is invalidated. `QueryExecutor` records each mapping table it actually writes; `EntityManager::flush()` discards any stale set at flush start, then takes the set after execution and passes it to `bumpWrittenTableGenerations()`.
+- **Joins qualify the default select.** With any join, an entity query's default column list is prefixed with the FROM table/alias, so shared column names (and self-joins) are not ambiguous.
+- **QueryBuilder DML bumps; raw SQL does not.** `QueryBuilder` `insert()`/`update()`/`delete()` bump the target table's generation right after `execute()`. Inside a caller-owned transaction that is before COMMIT (same window as `flush()` inside `transactional()`). Raw SQL and writes from other systems need `EntityManager::invalidateTables(...$tables)`.
+- **Named lists.** `cacheable(name: 'x')` gives the list its own generation counter (stored as `name:x`, cannot collide with a table); `EntityManager::invalidateCacheNames('x')` drops every list cached under that name. Table invalidation still applies to named lists too.
+- **Schema prefixes are dropped.** `shop.products` and `products` share one generation counter (`CollectionCache::tableGenerationKey()`), so a schema-qualified `from`/`join`/`dependsOn` is invalidated by a flush that bumps the bare entity table. Same-named tables in different schemas therefore share a counter — over-invalidation, never staleness.
+- **Shared across contexts.** Generations live in the shared pool, so a write in one `EntityManager` invalidates lists every context reads (unlike per-entity eviction).
+- **Cost:** one batched `getItems()` per `cacheable()` query for all generations (root plus dependency tables).
+- **Fail-open, with caveats.** A backend fault never breaks a query: an unreadable generation skips the cache for that call. But a failed bump during an outage leaves pre-change lists matchable after recovery until TTL.
+- **Generations are bumped after COMMIT.** When `flush()` owns its transaction, `EntityManager::flush()` calls `EntityCacheCoordinator::bumpWrittenTableGenerations()` only after the commit succeeds, so a concurrent reader can't re-cache pre-commit state under the new generation. A flush that throws or rolls back bumps nothing. Inside a caller-owned transaction (directly or via `transactional()`), the bump runs at the end of `flush()`, before the caller's COMMIT: a reader in that window can still cache pre-commit state under the new generation, and a later caller rollback leaves a needless bump. Same class as the `#[Version]` caller-transaction caveat below.
 
 ### Metadata Cache
 

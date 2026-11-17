@@ -24,7 +24,7 @@ class ChangeSetExecutor {
         }
 
         foreach ($orderedInserts as $entity) {
-            $this->queryExecutor->syncManyToMany($entity);
+            $this->queryExecutor->syncManyToMany($entity, isInsert: true);
         }
 
         $handles = [];

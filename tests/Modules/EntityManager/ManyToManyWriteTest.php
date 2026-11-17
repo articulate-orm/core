@@ -46,6 +46,22 @@ class WriteTestUser {
     public ?Collection $tags = null;
 }
 
+#[Entity(tableName: 'wt_users')]
+class WriteTestArrayUser {
+    #[PrimaryKey]
+    public int $id;
+
+    #[Property]
+    public string $name;
+
+    /** @var array<int, WriteTestTag>|Collection */
+    #[ManyToMany(
+        targetEntity: WriteTestTag::class,
+        mappingTable: new MappingTable(name: 'wt_user_tags')
+    )]
+    public array|Collection $tags = [];
+}
+
 #[Entity(tableName: 'wt_perms')]
 class WriteTestPerm {
     #[PrimaryKey]
@@ -301,6 +317,37 @@ class ManyToManyWriteTest extends DatabaseTestCase {
         $this->assertCount(1, $rows);
         $this->assertSame($user->id, (int) $rows[0]['wt_users_id']);
         $this->assertSame($tag->id, (int) $rows[0]['wt_tags_id']);
+    }
+
+    #[Group('database')]
+    public function testPlainArrayOnNewEntityInsertsPivotRowsAndBecomesCollection(): void
+    {
+        $this->prepareTables();
+
+        $tag1 = new WriteTestTag();
+        $tag1->name = 'php';
+        $tag2 = new WriteTestTag();
+        $tag2->name = 'orm';
+
+        $user = new WriteTestArrayUser();
+        $user->name = 'Grace';
+        $user->tags = [$tag1];
+
+        $this->em->persist($tag1);
+        $this->em->persist($tag2);
+        $this->em->persist($user);
+        $this->em->flush();
+
+        $rows = $this->pivotRows('wt_user_tags');
+        $this->assertCount(1, $rows);
+        $this->assertSame($user->id, (int) $rows[0]['wt_users_id']);
+        $this->assertSame($tag1->id, (int) $rows[0]['wt_tags_id']);
+        $this->assertInstanceOf(Collection::class, $user->tags);
+
+        $user->tags->add($tag2);
+        $this->em->flush();
+
+        $this->assertCount(2, $this->pivotRows('wt_user_tags'));
     }
 
     #[Group('database')]

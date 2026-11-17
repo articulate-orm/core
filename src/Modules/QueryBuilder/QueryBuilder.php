@@ -37,6 +37,8 @@ class QueryBuilder {
 
     private array $joins = []; // [['sql' => '...', 'params' => [...]], ...]
 
+    private DependencyTables $dependencyTables;
+
     private bool $distinct = false;
 
     private ?string $rawSql = null;
@@ -108,9 +110,10 @@ class QueryBuilder {
         $this->resultExecutor = new QueryResultExecutor($connection, $this->resultCache, $hydrator, null, $metadataRegistry);
         $this->dmlHandler = new DmlOperationHandler($metadataRegistry);
         $this->whereBuilder = new WhereClauseBuilder(
-            fn () => $this->createSubQueryBuilder(),
+            fn () => $this->createGroupBuilder(),
             $this->sqlCompiler
         );
+        $this->dependencyTables = new DependencyTables();
         $this->secondLevelCache = new QueryResultSecondLevelCache($collectionCache, $connection->getCacheNamespace());
         $this->cachedEntityResolver = $cachedEntityResolver;
         $this->secondLevelCacheDefaultTtl = $secondLevelCacheDefaultTtl;
@@ -123,6 +126,19 @@ class QueryBuilder {
         $subBuilder->disabledFilters = $this->disabledFilters;
 
         return $subBuilder;
+    }
+
+    private function createGroupBuilder(): QueryBuilder
+    {
+        $groupBuilder = $this->createSubQueryBuilder();
+        $groupBuilder->dependencyTables = $this->dependencyTables->forGroup();
+
+        return $groupBuilder;
+    }
+
+    private function embedSubquery(QueryBuilder $subquery): void
+    {
+        $this->dependencyTables->addSubquery($subquery->from, $subquery->dependencyTables);
     }
 
     public function withoutFilter(string $name): self
@@ -168,6 +184,9 @@ class QueryBuilder {
 
     public function whereIn(string $column, array|QueryBuilder $values): self
     {
+        if ($values instanceof QueryBuilder) {
+            $this->embedSubquery($values);
+        }
         $this->whereBuilder->whereIn($column, $values);
 
         return $this;
@@ -175,6 +194,9 @@ class QueryBuilder {
 
     public function whereNotIn(string $column, array|QueryBuilder $values): self
     {
+        if ($values instanceof QueryBuilder) {
+            $this->embedSubquery($values);
+        }
         $this->whereBuilder->whereNotIn($column, $values);
 
         return $this;
@@ -196,6 +218,7 @@ class QueryBuilder {
 
     public function whereExists(QueryBuilder $subquery): self
     {
+        $this->embedSubquery($subquery);
         $this->whereBuilder->whereExists($subquery);
 
         return $this;
@@ -217,6 +240,7 @@ class QueryBuilder {
 
     public function orWhereExists(QueryBuilder $subquery): self
     {
+        $this->embedSubquery($subquery);
         $this->whereBuilder->orWhereExists($subquery);
 
         return $this;
@@ -321,6 +345,7 @@ class QueryBuilder {
     public function resetJoins(): self
     {
         $this->joins = [];
+        $this->dependencyTables->resetJoins();
 
         return $this;
     }
@@ -353,6 +378,7 @@ class QueryBuilder {
         $this->whereBuilder->reset();
         $this->having = [];
         $this->joins = [];
+        $this->dependencyTables->reset();
         $this->orderBy = [];
         $this->groupBy = [];
         $this->limit = null;
@@ -504,6 +530,7 @@ class QueryBuilder {
     public function join(string $table, string $condition, mixed ...$params): self
     {
         $this->assertValidJoinTable($table);
+        $this->dependencyTables->addJoin($table);
         $this->joins[] = [
             'sql' => "JOIN {$table} ON {$condition}",
             'params' => $params,
@@ -515,6 +542,7 @@ class QueryBuilder {
     public function leftJoin(string $table, string $condition, mixed ...$params): self
     {
         $this->assertValidJoinTable($table);
+        $this->dependencyTables->addJoin($table);
         $this->joins[] = [
             'sql' => "LEFT JOIN {$table} ON {$condition}",
             'params' => $params,
@@ -526,6 +554,7 @@ class QueryBuilder {
     public function rightJoin(string $table, string $condition, mixed ...$params): self
     {
         $this->assertValidJoinTable($table);
+        $this->dependencyTables->addJoin($table);
         $this->joins[] = [
             'sql' => "RIGHT JOIN {$table} ON {$condition}",
             'params' => $params,
@@ -537,6 +566,7 @@ class QueryBuilder {
     public function crossJoin(string $table): self
     {
         $this->assertValidJoinTable($table);
+        $this->dependencyTables->addJoin($table);
         $this->joins[] = [
             'sql' => "CROSS JOIN {$table}",
             'params' => [],
@@ -653,15 +683,30 @@ class QueryBuilder {
      * identical call resolves entirely from cache. Silent no-op when the
      * query won't hydrate full entities via the default ObjectHydrator
      * (aggregates, specific column selection, explicit custom hydrator) —
-     * same condition getResult() already uses for hydration bypass. See
-     * ADR-0002.
+     * same condition getResult() already uses for hydration bypass. The
+     * cached list is keyed by the generations of its root table and every
+     * joined table, so any unit-of-work write to one of them makes it stop
+     * matching.
      *
      * Omitted $ttl falls back to the owning EntityManager's configured
-     * secondLevelCacheTtl.
+     * secondLevelCacheTtl. $dependsOn declares extra dependency tables by
+     * name for reads the builder can't detect (whereRaw, raw join
+     * conditions); undeclared raw-SQL dependencies are not invalidated on.
+     * $name gives the list a counter of its own, so
+     * EntityManager::invalidateCacheNames() can drop it (and every other list
+     * sharing the name) on demand.
+     *
+     * @param list<string> $dependsOn
      */
-    public function cacheable(?int $ttl = null): self
+    public function cacheable(?int $ttl = null, array $dependsOn = [], ?string $name = null): self
     {
         $this->secondLevelCache->enable($ttl);
+        foreach ($dependsOn as $table) {
+            $this->dependencyTables->addDeclared($table);
+        }
+        if ($name !== null) {
+            $this->dependencyTables->addDeclared(CollectionCacheInterface::NAME_PREFIX . $name);
+        }
 
         return $this;
     }
@@ -921,7 +966,7 @@ class QueryBuilder {
         // non-null $cacheKey below is this method's single "is this call cache
         // eligible" flag for the rest of the method.
         $cacheKey = $this->isCacheEligible($usesDefaultHydration, $targetClass)
-            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, $this->resolveTableName($targetClass))
+            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, $this->dependencyTables->withRoot($this->resolveTableName($targetClass)))
             : null;
 
         if ($cacheKey !== null) {
@@ -1001,8 +1046,7 @@ class QueryBuilder {
      */
     private function tryServeFromCache(string $targetClass, string $cacheKey): ?array
     {
-        $tableName = $this->resolveTableName($targetClass);
-        $cachedIds = $this->secondLevelCache->getCachedIdsWithCrossValidation($cacheKey, $tableName);
+        $cachedIds = $this->secondLevelCache->getCachedIds($cacheKey);
         if ($cachedIds === null) {
             return null;
         }
@@ -1018,8 +1062,7 @@ class QueryBuilder {
 
         $ids = $this->extractIds($results, $targetClass);
         if ($ids !== null) {
-            $tableName = $this->resolveTableName($targetClass);
-            $this->secondLevelCache->storeIdsWithReverseIndex($cacheKey, $ids, $this->secondLevelCacheDefaultTtl, $tableName);
+            $this->secondLevelCache->storeIds($cacheKey, $ids, $this->secondLevelCacheDefaultTtl);
         }
     }
 
@@ -1140,7 +1183,7 @@ class QueryBuilder {
         $dmlCommand = $this->dmlHandler->getCommand();
 
         if ($dmlCommand !== null) {
-            return $this->dmlHandler->execute(
+            $result = $this->dmlHandler->execute(
                 $this->connection,
                 $this->sqlCompiler,
                 $this->getFilteredWhere(),
@@ -1148,6 +1191,10 @@ class QueryBuilder {
                 $this->lockForUpdate,
                 fn (string $sql, array $params) => $this->expandInPlaceholders($sql, $params)
             );
+            // ponytail: bumps before a caller-owned COMMIT, same window as flush() inside transactional()
+            $this->secondLevelCache->invalidateTables([TableReference::table($this->from)]);
+
+            return $result;
         }
 
         if ($this->lockForUpdate && !$this->connection->inTransaction()) {

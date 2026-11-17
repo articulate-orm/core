@@ -17,38 +17,12 @@ class NullCollectionCache implements CollectionCacheInterface {
     {
     }
 
-    public function evictIdList(string $key): void
-    {
-    }
-
-    public function addToReverseIndex(string $tableName, mixed $id, string $cacheKey, int $ttl): void
-    {
-    }
-
-    public function addIdsToReverseIndex(string $tableName, array $ids, string $cacheKey, int $ttl): void
-    {
-    }
-
-    public function getReverseIndexCacheKeys(string $tableName, mixed $id): ?array
+    public function getTableGenerations(array $tableNames): ?array
     {
         return null;
     }
 
-    public function evictReverseIndex(string $tableName, mixed $id): void
-    {
-    }
-
-    public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array
-    {
-        return [];
-    }
-
-    public function getTableGeneration(string $tableName): ?int
-    {
-        return null;
-    }
-
-    public function incrementTableGeneration(string $tableName): void
+    public function incrementTableGenerations(array $tableNames): void
     {
     }
 }

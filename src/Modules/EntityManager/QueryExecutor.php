@@ -35,6 +35,9 @@ class QueryExecutor {
     /** @var EntityMetadata[] */
     private array $entityMetadataCache = [];
 
+    /** @var array<string, true> */
+    private array $writtenMappingTables = [];
+
     private VersionedRowWrite $versionedRowWrite;
 
     public function __construct(
@@ -630,8 +633,9 @@ class QueryExecutor {
      * Plain Collection:  DELETE-all then INSERT-all (no pivot data to diff).
      *
      * @param bool $dirtyOnly Skip collections that haven't changed since last flush
+     * @param bool $isInsert  Owner was just inserted: a plain array is wrapped into a Collection and written in full
      */
-    public function syncManyToMany(object $entity, bool $dirtyOnly = false): void
+    public function syncManyToMany(object $entity, bool $dirtyOnly = false, bool $isInsert = false): void
     {
         $metadata = $this->entityMetadataCache[$entity::class] ??= new EntityMetadata($entity::class);
 
@@ -651,6 +655,12 @@ class QueryExecutor {
             }
 
             $value = $entityProp->getValue($entity);
+
+            // ponytail: arrays on already-managed owners are still skipped; diffing them needs a pivot reload
+            if (is_array($value) && $isInsert) {
+                $value = new Collection($value);
+                $entityProp->setValue($entity, $value);
+            }
 
             if ($value === null || is_array($value)) {
                 continue;
@@ -727,7 +737,8 @@ class QueryExecutor {
                 $whereParts[] = "{$typeColumn} = ?";
                 $whereValues[] = $typeValue;
             }
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 "DELETE FROM {$pivotTable} WHERE " . implode(' AND ', $whereParts),
                 $whereValues
             );
@@ -757,7 +768,8 @@ class QueryExecutor {
                 $values[] = $now;
             }
 
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 sprintf(
                     'INSERT INTO %s (%s) VALUES (%s)',
                     $pivotTable,
@@ -789,7 +801,8 @@ class QueryExecutor {
                 $whereValues[] = $typeValue;
             }
 
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 sprintf(
                     'UPDATE %s SET %s WHERE %s',
                     $pivotTable,
@@ -822,7 +835,8 @@ class QueryExecutor {
                 $whereParts[] = "$typeColumn = ?";
                 $whereValues[] = $typeValue;
             }
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 "DELETE FROM {$pivotTable} WHERE " . implode(' AND ', $whereParts),
                 $whereValues
             );
@@ -847,7 +861,8 @@ class QueryExecutor {
                 $values[] = $now;
             }
 
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 sprintf(
                     'INSERT INTO %s (%s) VALUES (%s)',
                     $pivotTable,
@@ -895,7 +910,8 @@ class QueryExecutor {
             [, $ownerPkValues] = $this->buildWhereClause($entity);
 
             if ($relation instanceof ReflectionMorphToMany) {
-                $this->connection->executeQuery(
+                $this->executeMappingTableWrite(
+                    $relation->getTableName(),
                     sprintf(
                         'DELETE FROM %s WHERE %s = ? AND %s = ?',
                         $relation->getTableName(),
@@ -908,10 +924,33 @@ class QueryExecutor {
                 continue;
             }
 
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $relation->getPivotTableName(),
                 sprintf('DELETE FROM %s WHERE %s = ?', $relation->getPivotTableName(), $relation->getForeignPivotKey()),
                 [$ownerPkValues[0]]
             );
         }
+    }
+
+    /**
+     * @param list<mixed> $params
+     */
+    private function executeMappingTableWrite(string $table, string $sql, array $params): void
+    {
+        $this->writtenMappingTables[$table] = true;
+        $this->connection->executeQuery($sql, $params);
+    }
+
+    /**
+     * Returns every mapping table written since the last call and forgets them.
+     *
+     * @return list<string>
+     */
+    public function takeWrittenMappingTables(): array
+    {
+        $tableNames = array_map('strval', array_keys($this->writtenMappingTables));
+        $this->writtenMappingTables = [];
+
+        return $tableNames;
     }
 }

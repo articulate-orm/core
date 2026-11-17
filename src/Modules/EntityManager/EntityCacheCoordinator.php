@@ -64,8 +64,6 @@ class EntityCacheCoordinator {
             return;
         }
 
-        $this->bumpInsertedTableGenerations($changes['inserts']);
-
         foreach ($changes['updates'] as $update) {
             if ($update->entity !== null) {
                 $this->evictEntityFromSecondLevelCache($update->entity);
@@ -168,22 +166,40 @@ class EntityCacheCoordinator {
     }
 
     /**
-     * Inserts can't be matched against cached WHERE clauses (ADR-0002, case
-     * (b)), so each table that received at least one insert gets exactly one
-     * generation bump per flush, however many rows went into it.
+     * Every table the flush wrote gets exactly one generation bump, however
+     * many rows went into it and through however many sibling classes. A
+     * merged update has no single bound entity, so its own table is used.
+     * Mapping tables are not part of the change set, so the caller passes the
+     * ones the flush actually wrote.
+     * Called only once the written rows are visible (after COMMIT when flush()
+     * owns the transaction), so a concurrent reader cannot re-cache pre-commit
+     * state under the new generation.
      *
-     * @param object[] $inserts
+     * @param array{inserts: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
+     * @param list<string> $mappingTables
      */
-    private function bumpInsertedTableGenerations(array $inserts): void
+    public function bumpWrittenTableGenerations(array $changes, array $mappingTables): void
     {
-        $tableNames = [];
-        foreach ($inserts as $entity) {
-            $tableNames[$this->metadataRegistry->getTableName($this->resolveEntityClass($entity))] = true;
+        $tableNames = array_fill_keys($mappingTables, true);
+        foreach ([...$changes['inserts'], ...$changes['deletes'], ...$changes['softDeletes']] as $entity) {
+            $tableNames[$this->entityTableName($entity)] = true;
         }
 
-        foreach (array_keys($tableNames) as $tableName) {
-            $this->collectionCache->incrementTableGeneration((string) $tableName);
+        foreach ($changes['updates'] as $update) {
+            $tableName = $update instanceof MergedUpdate ? $update->table : $this->entityTableName($update->entity);
+            $tableNames[$tableName] = true;
         }
+
+        if ($tableNames === []) {
+            return;
+        }
+
+        $this->collectionCache->incrementTableGenerations(array_map('strval', array_keys($tableNames)));
+    }
+
+    private function entityTableName(object $entity): string
+    {
+        return $this->metadataRegistry->getTableName($this->resolveEntityClass($entity));
     }
 
     private function evictEntityFromSecondLevelCache(object $entity): void
@@ -201,33 +217,6 @@ class EntityCacheCoordinator {
         foreach (empty($siblingClasses) ? [$entityClass] : $siblingClasses as $class) {
             $this->secondLevelCache?->evict($class, $this->canonicalId($class, $id));
         }
-
-        $this->evictReverseIndexedQueryCacheEntries($tableName, $id);
-    }
-
-    /**
-     * Exact invalidation (ADR-0002): resolve the table + id for the
-     * changed row, look up the reverse index for that pair, and evict
-     * exactly the query-cache entries it names — never a blunt "evict
-     * everything for this table" sweep. Table-scoped so sibling classes
-     * sharing a table/PK resolve to the same entry, and unrelated tables
-     * with a coincidentally-matching raw id never collide. Normalization
-     * of $id happens inside the CollectionCacheInterface implementation
-     * (same as SecondLevelCache), so the raw id is passed through as-is.
-     */
-    private function evictReverseIndexedQueryCacheEntries(string $tableName, mixed $id): void
-    {
-        $cacheKeys = $this->collectionCache->getReverseIndexCacheKeys($tableName, $id);
-
-        if ($cacheKeys === null) {
-            return;
-        }
-
-        foreach ($cacheKeys as $cacheKey) {
-            $this->collectionCache->evictIdList($cacheKey);
-        }
-
-        $this->collectionCache->evictReverseIndex($tableName, $id);
     }
 
     private function resolveEntityClass(object $entity): string

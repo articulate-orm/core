@@ -633,8 +633,9 @@ class QueryExecutor {
      * Plain Collection:  DELETE-all then INSERT-all (no pivot data to diff).
      *
      * @param bool $dirtyOnly Skip collections that haven't changed since last flush
+     * @param bool $isInsert  Owner was just inserted: a plain array is wrapped into a Collection and written in full
      */
-    public function syncManyToMany(object $entity, bool $dirtyOnly = false): void
+    public function syncManyToMany(object $entity, bool $dirtyOnly = false, bool $isInsert = false): void
     {
         $metadata = $this->entityMetadataCache[$entity::class] ??= new EntityMetadata($entity::class);
 
@@ -654,6 +655,12 @@ class QueryExecutor {
             }
 
             $value = $entityProp->getValue($entity);
+
+            // ponytail: arrays on already-managed owners are still skipped; diffing them needs a pivot reload
+            if (is_array($value) && $isInsert) {
+                $value = new Collection($value);
+                $entityProp->setValue($entity, $value);
+            }
 
             if ($value === null || is_array($value)) {
                 continue;

@@ -196,6 +196,10 @@ class EntityManager {
 
             throw $e;
         }
+
+        // Outside the try: the rows are committed (or handed back to the caller's
+        // transaction), so a bump must never trigger a rollback.
+        $this->cacheCoordinator->bumpWrittenTableGenerations($aggregatedChanges);
     }
 
     public function clear(): void

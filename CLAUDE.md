@@ -172,7 +172,8 @@ Contract — read before relying on it:
 - **Unit-of-work writes only.** `QueryBuilder` DML and raw SQL do not bump generations.
 - **Shared across contexts.** Generations live in the shared pool, so a write in one `EntityManager` invalidates lists every context reads (unlike per-entity eviction).
 - **Cost:** one batched `getItems()` per `cacheable()` query for all generations (root plus dependency tables).
-- **Fail-open, with caveats.** A backend fault never breaks a query: an unreadable generation skips the cache for that call. But a failed bump during an outage leaves pre-change lists matchable after recovery until TTL, and the bump runs before COMMIT, so a concurrent reader can re-cache pre-commit state.
+- **Fail-open, with caveats.** A backend fault never breaks a query: an unreadable generation skips the cache for that call. But a failed bump during an outage leaves pre-change lists matchable after recovery until TTL.
+- **Generations are bumped after COMMIT.** When `flush()` owns its transaction, `EntityManager::flush()` calls `EntityCacheCoordinator::bumpWrittenTableGenerations()` only after the commit succeeds, so a concurrent reader can't re-cache pre-commit state under the new generation. A flush that throws or rolls back bumps nothing. Inside a caller-owned transaction (directly or via `transactional()`), the bump runs at the end of `flush()`, before the caller's COMMIT: a reader in that window can still cache pre-commit state under the new generation, and a later caller rollback leaves a needless bump. Same class as the `#[Version]` caller-transaction caveat below.
 
 ### Metadata Cache
 

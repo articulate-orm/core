@@ -64,8 +64,6 @@ class EntityCacheCoordinator {
             return;
         }
 
-        $this->bumpWrittenTableGenerations($changes);
-
         foreach ($changes['updates'] as $update) {
             if ($update->entity !== null) {
                 $this->evictEntityFromSecondLevelCache($update->entity);
@@ -171,10 +169,13 @@ class EntityCacheCoordinator {
      * Every table the flush wrote gets exactly one generation bump, however
      * many rows went into it and through however many sibling classes. A
      * merged update has no single bound entity, so its own table is used.
+     * Called only once the written rows are visible (after COMMIT when flush()
+     * owns the transaction), so a concurrent reader cannot re-cache pre-commit
+     * state under the new generation.
      *
      * @param array{inserts: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
      */
-    private function bumpWrittenTableGenerations(array $changes): void
+    public function bumpWrittenTableGenerations(array $changes): void
     {
         $tableNames = [];
         foreach ([...$changes['inserts'], ...$changes['deletes'], ...$changes['softDeletes']] as $entity) {

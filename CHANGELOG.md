@@ -19,8 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection namespace and table, randomly seeded). A flush bumps it once per written table, for
   inserts, entity updates, merged updates, hard deletes and soft deletes. A cached id-list is keyed
   by its root table's generation, so any such write makes it stop matching, including an update that
-  moves a row into or out of the cached predicate and a merged update across sibling slices. Writes
-  to joined tables, `QueryBuilder` DML and raw SQL do not invalidate yet.
+  moves a row into or out of the cached predicate and a merged update across sibling slices.
+  `QueryBuilder` DML and raw SQL do not invalidate yet.
+- Joined tables are dependency tables of a `cacheable()` query: the key folds in the generation of
+  every table reached via `join`/`leftJoin`/`rightJoin`/`crossJoin` (alias stripped, self-join counted
+  once), read in one batched pool call, so a write to a joined table invalidates the list. Trade-off:
+  more writes now evict a joined list, lowering its hit rate. Subquery tables are not covered yet.
+- **Fixed:** an entity query with joins now qualifies its default column list with the FROM table or
+  alias, so columns shared with a joined table (or a self-join) are no longer ambiguous.
 - All collection-cache keys (`l2q_`, `l2qgen_`) contain only PSR-6-safe characters (no `:`), so
   strict pools such as Symfony Cache accept them.
 - `symfony/cache` added as a dev dependency (PSR-6 key validation in tests).

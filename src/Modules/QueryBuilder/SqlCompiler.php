@@ -41,7 +41,7 @@ class SqlCompiler {
         }
 
         $selectClause = $distinct ? 'SELECT DISTINCT ' : 'SELECT ';
-        $sql = $selectClause . $this->buildSelectClause($select);
+        $sql = $selectClause . $this->buildSelectClause($select, $joins === [] ? null : $from);
         $sql .= ' FROM ' . $from;
 
         if (!empty($joins)) {
@@ -203,7 +203,24 @@ class SqlCompiler {
         return $reversed;
     }
 
-    private function buildSelectClause(array $select): string
+    /**
+     * @param list<string> $columns
+     * @return list<string>
+     */
+    private function qualifyColumns(array $columns, ?string $from): array
+    {
+        if ($from === null) {
+            return $columns;
+        }
+
+        $parts = preg_split('/\s+/', trim($from));
+        $reference = end($parts);
+
+        return array_map(static fn (string $column): string => "{$reference}.{$column}", $columns);
+    }
+
+    // With joins, an unqualified entity column can be ambiguous (always so in a self-join)
+    private function buildSelectClause(array $select, ?string $qualifyWithFrom): string
     {
         if (empty($select)) {
             if ($this->entityClass && $this->metadataRegistry) {
@@ -212,7 +229,7 @@ class SqlCompiler {
                         ->getMetadata($this->entityClass)
                         ->getColumnNames();
                     if (!empty($columns)) {
-                        return implode(', ', $columns);
+                        return implode(', ', $this->qualifyColumns($columns, $qualifyWithFrom));
                     }
                 } catch (InvalidArgumentException $e) {
                 }

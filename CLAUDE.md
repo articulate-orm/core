@@ -167,10 +167,11 @@ Contract — read before relying on it:
 Contract — read before relying on it:
 - **Any write to the root table invalidates.** Each key folds in the root table's generation. A flush bumps it once per written table, for inserts, entity updates, merged updates, hard deletes and soft deletes — however many rows, through whichever sibling slice. Old lists stop matching and age out via TTL. This covers an UPDATE moving a row into or out of a cached predicate.
 - **Coarse by design.** Any write to a table evicts every list cached against it. Correctness over hit rate; choose which queries are worth caching.
-- **Root table only (for now).** A change to a joined/filtered-through table does not invalidate the list.
+- **Joined tables are dependency tables.** Every table reached through `join`/`leftJoin`/`rightJoin`/`crossJoin` adds its generation to the key (alias stripped, self-join counted once), so a write to it invalidates the list too. Trade-off: the list now misses on writes to any of those tables, so a join against a busy table lowers the hit rate. Collection lives in `DependencyTables` (`src/Modules/QueryBuilder/`). Subquery tables are not covered yet.
+- **Joins qualify the default select.** With any join, an entity query's default column list is prefixed with the FROM table/alias, so shared column names (and self-joins) are not ambiguous.
 - **Unit-of-work writes only.** `QueryBuilder` DML and raw SQL do not bump generations.
 - **Shared across contexts.** Generations live in the shared pool, so a write in one `EntityManager` invalidates lists every context reads (unlike per-entity eviction).
-- **Cost:** one batched `getItems()` per `cacheable()` query for the generation(s).
+- **Cost:** one batched `getItems()` per `cacheable()` query for all generations (root plus dependency tables).
 - **Fail-open, with caveats.** A backend fault never breaks a query: an unreadable generation skips the cache for that call. But a failed bump during an outage leaves pre-change lists matchable after recovery until TTL, and the bump runs before COMMIT, so a concurrent reader can re-cache pre-commit state.
 
 ### Metadata Cache

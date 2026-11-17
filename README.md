@@ -331,7 +331,7 @@ $active = $em->createQueryBuilder(User::class)
     ->getResult();
 ```
 
-Invalidation is coarse: every table has a **table generation** counter, bumped once per `flush()` that inserts, updates, deletes or soft-deletes rows in it. A cached list is keyed by its root table's generation, so any such write makes it stop matching, including updates that move a row into or out of the predicate. Writes to other tables keep it a hit. Not covered: changes to joined tables (for now), and writes made through `QueryBuilder` DML or raw SQL.
+Invalidation is coarse: every table has a **table generation** counter, bumped once per `flush()` that inserts, updates, deletes or soft-deletes rows in it. A cached list is keyed by its root table's generation, so any such write makes it stop matching, including updates that move a row into or out of the predicate. Joined tables (`join`, `leftJoin`, `rightJoin`, `crossJoin`, aliased or not) count too: their generations are part of the key, so a write to a joined table also invalidates. The cost is hit rate: a query joined against a frequently written table misses after each of those writes. Writes to tables the query does not read keep it a hit. All generations are read in one batched pool call; if any is unreadable, the query runs uncached. Not covered: tables read only through subqueries (for now), and writes made through `QueryBuilder` DML or raw SQL.
 
 ### Query Result Cache
 

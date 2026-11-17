@@ -37,6 +37,8 @@ class QueryBuilder {
 
     private array $joins = []; // [['sql' => '...', 'params' => [...]], ...]
 
+    private DependencyTables $dependencyTables;
+
     private bool $distinct = false;
 
     private ?string $rawSql = null;
@@ -111,6 +113,7 @@ class QueryBuilder {
             fn () => $this->createSubQueryBuilder(),
             $this->sqlCompiler
         );
+        $this->dependencyTables = new DependencyTables();
         $this->secondLevelCache = new QueryResultSecondLevelCache($collectionCache, $connection->getCacheNamespace());
         $this->cachedEntityResolver = $cachedEntityResolver;
         $this->secondLevelCacheDefaultTtl = $secondLevelCacheDefaultTtl;
@@ -321,6 +324,7 @@ class QueryBuilder {
     public function resetJoins(): self
     {
         $this->joins = [];
+        $this->dependencyTables->clear();
 
         return $this;
     }
@@ -353,6 +357,7 @@ class QueryBuilder {
         $this->whereBuilder->reset();
         $this->having = [];
         $this->joins = [];
+        $this->dependencyTables->clear();
         $this->orderBy = [];
         $this->groupBy = [];
         $this->limit = null;
@@ -504,6 +509,7 @@ class QueryBuilder {
     public function join(string $table, string $condition, mixed ...$params): self
     {
         $this->assertValidJoinTable($table);
+        $this->dependencyTables->addJoinTarget($table);
         $this->joins[] = [
             'sql' => "JOIN {$table} ON {$condition}",
             'params' => $params,
@@ -515,6 +521,7 @@ class QueryBuilder {
     public function leftJoin(string $table, string $condition, mixed ...$params): self
     {
         $this->assertValidJoinTable($table);
+        $this->dependencyTables->addJoinTarget($table);
         $this->joins[] = [
             'sql' => "LEFT JOIN {$table} ON {$condition}",
             'params' => $params,
@@ -526,6 +533,7 @@ class QueryBuilder {
     public function rightJoin(string $table, string $condition, mixed ...$params): self
     {
         $this->assertValidJoinTable($table);
+        $this->dependencyTables->addJoinTarget($table);
         $this->joins[] = [
             'sql' => "RIGHT JOIN {$table} ON {$condition}",
             'params' => $params,
@@ -537,6 +545,7 @@ class QueryBuilder {
     public function crossJoin(string $table): self
     {
         $this->assertValidJoinTable($table);
+        $this->dependencyTables->addJoinTarget($table);
         $this->joins[] = [
             'sql' => "CROSS JOIN {$table}",
             'params' => [],
@@ -654,8 +663,9 @@ class QueryBuilder {
      * query won't hydrate full entities via the default ObjectHydrator
      * (aggregates, specific column selection, explicit custom hydrator) —
      * same condition getResult() already uses for hydration bypass. The
-     * cached list is keyed by its root table's generation, so any
-     * unit-of-work write to that table makes it stop matching.
+     * cached list is keyed by the generations of its root table and every
+     * joined table, so any unit-of-work write to one of them makes it stop
+     * matching.
      *
      * Omitted $ttl falls back to the owning EntityManager's configured
      * secondLevelCacheTtl.
@@ -922,7 +932,7 @@ class QueryBuilder {
         // non-null $cacheKey below is this method's single "is this call cache
         // eligible" flag for the rest of the method.
         $cacheKey = $this->isCacheEligible($usesDefaultHydration, $targetClass)
-            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, [$this->resolveTableName($targetClass)])
+            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, $this->dependencyTables->withRoot($this->resolveTableName($targetClass)))
             : null;
 
         if ($cacheKey !== null) {

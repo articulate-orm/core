@@ -21,20 +21,8 @@ class SpyCollectionCache implements CollectionCacheInterface {
     /** @var list<array{key: string, ids: list<mixed>, ttl: int}> */
     public array $setCalls = [];
 
-    /** @var list<string> */
-    public array $evictIdListCalls = [];
-
-    /** @var list<array{table: string, id: mixed, cacheKey: string, ttl: int}> */
-    public array $addToReverseIndexCalls = [];
-
-    /** @var list<array{table: string, id: mixed}> */
-    public array $getReverseIndexCacheKeysCalls = [];
-
-    /** @var list<array{table: string, id: mixed}> */
-    public array $evictReverseIndexCalls = [];
-
-    /** @var list<array{table: string, ids: list<mixed>}> */
-    public array $findMissingReverseIndexIdsCalls = [];
+    /** @var list<list<string>> */
+    public array $generationReads = [];
 
     /** @var array<string, int|null> null simulates an unreadable counter */
     public array $tableGenerations = [];
@@ -42,34 +30,12 @@ class SpyCollectionCache implements CollectionCacheInterface {
     /** @var list<mixed>|null */
     private ?array $nextGetResult = null;
 
-    /** @var array<string, list<string>> keyed by "$table:$id" */
-    private array $reverseIndexCacheKeysToReturn = [];
-
-    /** @var list<mixed> */
-    private array $missingReverseIndexIdsToReturn = [];
-
     /**
      * @param list<mixed>|null $ids
      */
     public function willReturnOnNextGet(?array $ids): void
     {
         $this->nextGetResult = $ids;
-    }
-
-    /**
-     * @param list<string>|null $cacheKeys
-     */
-    public function willReturnReverseIndexCacheKeysFor(string $tableName, mixed $id, ?array $cacheKeys): void
-    {
-        $this->reverseIndexCacheKeysToReturn[$tableName . ':' . $id] = $cacheKeys;
-    }
-
-    /**
-     * @param list<mixed> $ids
-     */
-    public function willReturnMissingReverseIndexIds(array $ids): void
-    {
-        $this->missingReverseIndexIdsToReturn = $ids;
     }
 
     public function getIdList(string $key): ?array
@@ -84,50 +50,27 @@ class SpyCollectionCache implements CollectionCacheInterface {
         $this->setCalls[] = ['key' => $key, 'ids' => $ids, 'ttl' => $ttl];
     }
 
-    public function evictIdList(string $key): void
+    public function getTableGenerations(array $tableNames): ?array
     {
-        $this->evictIdListCalls[] = $key;
-    }
+        $this->generationReads[] = $tableNames;
 
-    public function addToReverseIndex(string $tableName, mixed $id, string $cacheKey, int $ttl): void
-    {
-        $this->addToReverseIndexCalls[] = ['table' => $tableName, 'id' => $id, 'cacheKey' => $cacheKey, 'ttl' => $ttl];
-    }
-
-    public function addIdsToReverseIndex(string $tableName, array $ids, string $cacheKey, int $ttl): void
-    {
-        foreach ($ids as $id) {
-            $this->addToReverseIndex($tableName, $id, $cacheKey, $ttl);
+        $generations = [];
+        foreach ($tableNames as $tableName) {
+            $generation = array_key_exists($tableName, $this->tableGenerations) ? $this->tableGenerations[$tableName] : 0;
+            if ($generation === null) {
+                return null;
+            }
+            $generations[$tableName] = $generation;
         }
+
+        return $generations;
     }
 
-    public function getReverseIndexCacheKeys(string $tableName, mixed $id): ?array
+    public function incrementTableGenerations(array $tableNames): void
     {
-        $this->getReverseIndexCacheKeysCalls[] = ['table' => $tableName, 'id' => $id];
-
-        return $this->reverseIndexCacheKeysToReturn[$tableName . ':' . $id] ?? null;
-    }
-
-    public function evictReverseIndex(string $tableName, mixed $id): void
-    {
-        $this->evictReverseIndexCalls[] = ['table' => $tableName, 'id' => $id];
-    }
-
-    public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array
-    {
-        $this->findMissingReverseIndexIdsCalls[] = ['table' => $tableName, 'ids' => $ids, 'cacheKey' => $cacheKey];
-
-        return $this->missingReverseIndexIdsToReturn;
-    }
-
-    public function getTableGeneration(string $tableName): ?int
-    {
-        return array_key_exists($tableName, $this->tableGenerations) ? $this->tableGenerations[$tableName] : 0;
-    }
-
-    public function incrementTableGeneration(string $tableName): void
-    {
-        $this->tableGenerations[$tableName] = ($this->tableGenerations[$tableName] ?? 0) + 1;
+        foreach ($tableNames as $tableName) {
+            $this->tableGenerations[$tableName] = ($this->tableGenerations[$tableName] ?? 0) + 1;
+        }
     }
 }
 
@@ -235,8 +178,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM users', [1, 'x'], 'products');
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM users', [1, 'x'], 'products');
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM users', [1, 'x'], ['products']);
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM users', [1, 'x'], ['products']);
 
         $this->assertSame($keyA, $keyB);
     }
@@ -245,8 +188,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t', [], 'products');
-        $keyB = $cache->buildCacheKey('App\\Order', 'SELECT * FROM t', [], 'products');
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t', [], ['products']);
+        $keyB = $cache->buildCacheKey('App\\Order', 'SELECT * FROM t', [], ['products']);
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -255,8 +198,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE a = ?', [], 'products');
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE b = ?', [], 'products');
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE a = ?', [], ['products']);
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE b = ?', [], ['products']);
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -265,8 +208,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE id = ?', [1], 'products');
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE id = ?', [2], 'products');
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE id = ?', [1], ['products']);
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE id = ?', [2], ['products']);
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -277,8 +220,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         // and ('AppUser', 'SELECT...') could concatenate to the same string.
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App', 'UserSELECT 1', [], 'products');
-        $keyB = $cache->buildCacheKey('AppUser', 'SELECT 1', [], 'products');
+        $keyA = $cache->buildCacheKey('App', 'UserSELECT 1', [], ['products']);
+        $keyB = $cache->buildCacheKey('AppUser', 'SELECT 1', [], ['products']);
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -287,8 +230,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyNull = $cache->buildCacheKey(null, 'SELECT 1', [], 'products');
-        $keyEmptyString = $cache->buildCacheKey('', 'SELECT 1', [], 'products');
+        $keyNull = $cache->buildCacheKey(null, 'SELECT 1', [], ['products']);
+        $keyEmptyString = $cache->buildCacheKey('', 'SELECT 1', [], ['products']);
 
         // Both collapse to the same '' segment by design (documented behavior,
         // not a bug) — pin it explicitly so a future change notices.
@@ -315,14 +258,14 @@ class QueryResultSecondLevelCacheTest extends TestCase {
 
         $expected = 'cq_' . hash('sha256', serialize(['', $entityClass, $sql, $params, 'products:0']));
 
-        $this->assertSame($expected, $cache->buildCacheKey($entityClass, $sql, $params, 'products'));
+        $this->assertSame($expected, $cache->buildCacheKey($entityClass, $sql, $params, ['products']));
     }
 
     public function testBuildCacheKeyHasTheCqPrefix(): void
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $key = $cache->buildCacheKey('App\\User', 'SELECT 1', [], 'products');
+        $key = $cache->buildCacheKey('App\\User', 'SELECT 1', [], ['products']);
 
         $this->assertStringStartsWith('cq_', $key);
     }
@@ -331,8 +274,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x01"], 'products');
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x02"], 'products');
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x01"], ['products']);
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE uuid = ?', ["\xff\xfe\x02"], ['products']);
 
         $this->assertNotNull($keyA);
         $this->assertNotNull($keyB);
@@ -343,9 +286,9 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)], 'products');
-        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(2)], 'products');
-        $keyA2 = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)], 'products');
+        $keyA = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)], ['products']);
+        $keyB = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(2)], ['products']);
+        $keyA2 = $cache->buildCacheKey('App\\User', 'SELECT * FROM t WHERE v = ?', [new QbCachePrivateFieldParam(1)], ['products']);
 
         $this->assertNotSame($keyA, $keyB);
         $this->assertSame($keyA, $keyA2);
@@ -355,8 +298,8 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $keyA = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([1])], 'products');
-        $keyB = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([2])], 'products');
+        $keyA = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([1])], ['products']);
+        $keyB = $cache->buildCacheKey(null, 'SELECT 1', [new \ArrayObject([2])], ['products']);
 
         $this->assertNotSame($keyA, $keyB);
     }
@@ -366,12 +309,12 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
         $this->assertNotSame(
-            $cache->buildCacheKey(null, 'SELECT 1', [1], 'products'),
-            $cache->buildCacheKey(null, 'SELECT 1', ['1'], 'products'),
+            $cache->buildCacheKey(null, 'SELECT 1', [1], ['products']),
+            $cache->buildCacheKey(null, 'SELECT 1', ['1'], ['products']),
         );
         $this->assertNotSame(
-            $cache->buildCacheKey(null, 'SELECT 1', [[1, 2]], 'products'),
-            $cache->buildCacheKey(null, 'SELECT 1', [[1], 2], 'products'),
+            $cache->buildCacheKey(null, 'SELECT 1', [[1, 2]], ['products']),
+            $cache->buildCacheKey(null, 'SELECT 1', [[1], 2], ['products']),
         );
     }
 
@@ -379,16 +322,16 @@ class QueryResultSecondLevelCacheTest extends TestCase {
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [new QbCacheUnserializableParam()], 'products'));
-        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [[new QbCacheUnserializableParam()]], 'products'));
-        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [fopen('php://memory', 'r')], 'products'));
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [new QbCacheUnserializableParam()], ['products']));
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [[new QbCacheUnserializableParam()]], ['products']));
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [fopen('php://memory', 'r')], ['products']));
     }
 
     public function testNullParamsAreAllowed(): void
     {
         $cache = new QueryResultSecondLevelCache(new SpyCollectionCache());
 
-        $this->assertNotNull($cache->buildCacheKey(null, 'SELECT 1', [null], 'products'));
+        $this->assertNotNull($cache->buildCacheKey(null, 'SELECT 1', [null], ['products']));
     }
 
     public function testNamespaceIsPartOfTheKey(): void
@@ -396,7 +339,7 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $a = new QueryResultSecondLevelCache(new SpyCollectionCache(), 'ns-a');
         $b = new QueryResultSecondLevelCache(new SpyCollectionCache(), 'ns-b');
 
-        $this->assertNotSame($a->buildCacheKey(null, 'SELECT 1', [], 'products'), $b->buildCacheKey(null, 'SELECT 1', [], 'products'));
+        $this->assertNotSame($a->buildCacheKey(null, 'SELECT 1', [], ['products']), $b->buildCacheKey(null, 'SELECT 1', [], ['products']));
     }
 
     public function testObjectParamKeyIncludesTheObjectTag(): void
@@ -406,7 +349,7 @@ class QueryResultSecondLevelCacheTest extends TestCase {
 
         $expected = 'cq_' . hash('sha256', serialize(['', '', 'SELECT 1', [['o', QbCachePrivateFieldParam::class, serialize($object)]], 'products:0']));
 
-        $this->assertSame($expected, $cache->buildCacheKey(null, 'SELECT 1', [$object], 'products'));
+        $this->assertSame($expected, $cache->buildCacheKey(null, 'SELECT 1', [$object], ['products']));
     }
 
     public function testAnUnreadableTableGenerationYieldsNoKey(): void
@@ -415,119 +358,38 @@ class QueryResultSecondLevelCacheTest extends TestCase {
         $collectionCache->tableGenerations['products'] = null;
         $cache = new QueryResultSecondLevelCache($collectionCache);
 
-        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [], 'products'));
+        $this->assertNull($cache->buildCacheKey(null, 'SELECT 1', [], ['products']));
     }
 
-    public function testStoreIdsWithReverseIndexWritesTheIdListWhenEnabled(): void
-    {
-        $collectionCache = new SpyCollectionCache();
-        $cache = new QueryResultSecondLevelCache($collectionCache);
-        $cache->enable(null);
-
-        $cache->storeIdsWithReverseIndex('some-key', [1, 2], 3600, 'products');
-
-        $this->assertCount(1, $collectionCache->setCalls);
-        $this->assertSame([1, 2], $collectionCache->setCalls[0]['ids']);
-    }
-
-    public function testStoreIdsWithReverseIndexWritesAReverseIndexEntryPerId(): void
-    {
-        $collectionCache = new SpyCollectionCache();
-        $cache = new QueryResultSecondLevelCache($collectionCache);
-        $cache->enable(null);
-
-        $cache->storeIdsWithReverseIndex('some-key', [1, 2], 3600, 'products');
-
-        $this->assertCount(2, $collectionCache->addToReverseIndexCalls);
-        $this->assertSame(['table' => 'products', 'id' => 1, 'cacheKey' => 'some-key', 'ttl' => 3600], $collectionCache->addToReverseIndexCalls[0]);
-        $this->assertSame(['table' => 'products', 'id' => 2, 'cacheKey' => 'some-key', 'ttl' => 3600], $collectionCache->addToReverseIndexCalls[1]);
-    }
-
-    public function testStoreIdsWithReverseIndexDoesNothingWhenDisabled(): void
+    public function testEveryTableGenerationIsReadInOneSortedDeduplicatedBatch(): void
     {
         $collectionCache = new SpyCollectionCache();
         $cache = new QueryResultSecondLevelCache($collectionCache);
 
-        $cache->storeIdsWithReverseIndex('some-key', [1, 2], 3600, 'products');
+        $cache->buildCacheKey(null, 'SELECT 1', [], ['posts', 'products', 'posts']);
 
-        $this->assertSame([], $collectionCache->setCalls);
-        $this->assertSame([], $collectionCache->addToReverseIndexCalls);
+        $this->assertSame([['posts', 'products']], $collectionCache->generationReads);
     }
 
-    public function testStoreIdsWithReverseIndexUsesExplicitTtlOverTheDefaultForBoth(): void
+    public function testBuildCacheKeyFoldsInEveryTablesGenerationInSortedOrder(): void
+    {
+        $collectionCache = new SpyCollectionCache();
+        $collectionCache->tableGenerations = ['posts' => 7, 'products' => 3];
+        $cache = new QueryResultSecondLevelCache($collectionCache);
+
+        $expected = 'cq_' . hash('sha256', serialize(['', '', 'SELECT 1', [], 'posts:7', 'products:3']));
+
+        $this->assertSame($expected, $cache->buildCacheKey(null, 'SELECT 1', [], ['products', 'posts']));
+    }
+
+    public function testBumpingAnyTablesGenerationChangesTheKey(): void
     {
         $collectionCache = new SpyCollectionCache();
         $cache = new QueryResultSecondLevelCache($collectionCache);
-        $cache->enable(120);
+        $before = $cache->buildCacheKey(null, 'SELECT 1', [], ['products', 'posts']);
 
-        $cache->storeIdsWithReverseIndex('some-key', [1], 3600, 'products');
+        $collectionCache->incrementTableGenerations(['posts']);
 
-        $this->assertSame(120, $collectionCache->setCalls[0]['ttl']);
-        $this->assertSame(120, $collectionCache->addToReverseIndexCalls[0]['ttl']);
-    }
-
-    public function testGetCachedIdsWithCrossValidationReturnsNullWhenDisabled(): void
-    {
-        $collectionCache = new SpyCollectionCache();
-        $collectionCache->willReturnOnNextGet([1, 2]);
-        $cache = new QueryResultSecondLevelCache($collectionCache);
-
-        $result = $cache->getCachedIdsWithCrossValidation('some-key', 'products');
-
-        $this->assertNull($result);
-        $this->assertSame([], $collectionCache->getCalls);
-    }
-
-    public function testGetCachedIdsWithCrossValidationReturnsNullOnPlainMiss(): void
-    {
-        $collectionCache = new SpyCollectionCache();
-        $collectionCache->willReturnOnNextGet(null);
-        $cache = new QueryResultSecondLevelCache($collectionCache);
-        $cache->enable(null);
-
-        $result = $cache->getCachedIdsWithCrossValidation('some-key', 'products');
-
-        $this->assertNull($result);
-    }
-
-    public function testGetCachedIdsWithCrossValidationReturnsTheListWhenReverseIndexIsIntact(): void
-    {
-        $collectionCache = new SpyCollectionCache();
-        $collectionCache->willReturnOnNextGet([1, 2]);
-        $collectionCache->willReturnMissingReverseIndexIds([]);
-        $cache = new QueryResultSecondLevelCache($collectionCache);
-        $cache->enable(null);
-
-        $result = $cache->getCachedIdsWithCrossValidation('some-key', 'products');
-
-        $this->assertSame([1, 2], $result);
-    }
-
-    public function testGetCachedIdsWithCrossValidationDiscardsTheWholeListWhenAnyReverseIndexEntryIsMissing(): void
-    {
-        $collectionCache = new SpyCollectionCache();
-        $collectionCache->willReturnOnNextGet([1, 2]);
-        $collectionCache->willReturnMissingReverseIndexIds([2]);
-        $cache = new QueryResultSecondLevelCache($collectionCache);
-        $cache->enable(null);
-
-        $result = $cache->getCachedIdsWithCrossValidation('some-key', 'products');
-
-        $this->assertNull($result, 'A missing reverse-index entry for any id must discard the ENTIRE cached list, not partially repair it.');
-    }
-
-    public function testGetCachedIdsWithCrossValidationChecksEveryIdInTheHitListInOneBatchedCall(): void
-    {
-        $collectionCache = new SpyCollectionCache();
-        $collectionCache->willReturnOnNextGet([1, 2, 3]);
-        $collectionCache->willReturnMissingReverseIndexIds([]);
-        $cache = new QueryResultSecondLevelCache($collectionCache);
-        $cache->enable(null);
-
-        $cache->getCachedIdsWithCrossValidation('some-key', 'products');
-
-        $this->assertCount(1, $collectionCache->findMissingReverseIndexIdsCalls, 'Must be a single batched existence check, not N round-trips.');
-        $this->assertSame('products', $collectionCache->findMissingReverseIndexIdsCalls[0]['table']);
-        $this->assertSame([1, 2, 3], $collectionCache->findMissingReverseIndexIdsCalls[0]['ids']);
+        $this->assertNotSame($before, $cache->buildCacheKey(null, 'SELECT 1', [], ['products', 'posts']));
     }
 }

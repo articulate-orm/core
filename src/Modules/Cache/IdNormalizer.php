@@ -8,11 +8,8 @@ use InvalidArgumentException;
  * Produces a deterministic, type-tagged string for an identifier so distinct
  * ids never collide on the same key (e.g. int 1 vs string "1", or two value
  * objects that JSON-encode to the same shape). Composite keys (arrays) are
- * normalized recursively in a stable order.
- *
- * Shared by SecondLevelCache (per-entity region) and the reverse-index
- * writes/lookups in this module, so both halves of the L2 cache agree on
- * exactly the same id representation for the same identifier value.
+ * normalized recursively in a stable order. Used by SecondLevelCache to
+ * build per-entity keys.
  */
 final class IdNormalizer {
     public static function normalize(mixed $id): string

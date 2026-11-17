@@ -11,8 +11,7 @@ namespace Articulate\Schema;
  *
  * A null return means the id could not be resolved without a database read —
  * the caller must treat the whole cached list as a miss, not patch it
- * partially (same whole-list-discard rule as ADR-0002's read-time
- * cross-validation).
+ * partially.
  */
 interface CachedEntityResolverInterface {
     public function tryResolve(string $class, mixed $id): ?object;

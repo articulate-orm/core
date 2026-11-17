@@ -477,9 +477,9 @@ class QueryBuilderCacheableTest extends DatabaseTestCase {
 
         $em->createQueryBuilder(QbCacheProduct::class)->orderBy('id')->cacheable()->getResult();
 
-        $this->assertSame(3 + 3, $cache->saveDeferredCalls, 'Entity rows and reverse-index entries are queued, one per row.');
-        $this->assertSame(2, $cache->commitCalls, 'one commit for the entity rows, one for the whole reverse index.');
-        $this->assertSame(2, $cache->saveCalls, 'Only the id-list and the cold table\'s first insert-generation seed are saved individually.');
+        $this->assertSame(3, $cache->saveDeferredCalls, 'Entity rows are queued, one per row.');
+        $this->assertSame(1, $cache->commitCalls, 'One commit for all entity rows.');
+        $this->assertSame(2, $cache->saveCalls, 'Only the id-list and the cold table\'s first generation seed are saved individually.');
 
         $em->clear();
         $getItemBefore = $cache->getItemCalls;
@@ -489,8 +489,8 @@ class QueryBuilderCacheableTest extends DatabaseTestCase {
 
         $this->assertSame(['A', 'B', 'C'], array_map(fn (object $p): string => $p->name, $result));
         $this->assertSame(1, $logger->selectCount);
-        $this->assertSame(2, $cache->getItemCalls - $getItemBefore, 'Only the table generation read (the key depends on it) and the id-list lookup use getItem().');
-        $this->assertSame(2, $cache->getItemsCalls - $getItemsBefore, 'One getItems() cross-validates the reverse index, one resolves all entities.');
+        $this->assertSame(1, $cache->getItemCalls - $getItemBefore, 'Only the id-list lookup uses getItem().');
+        $this->assertSame(2, $cache->getItemsCalls - $getItemsBefore, 'One getItems() reads the table generations, one resolves all entities.');
     }
 
     #[DataProvider('databaseProvider')]

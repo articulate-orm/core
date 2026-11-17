@@ -653,8 +653,9 @@ class QueryBuilder {
      * identical call resolves entirely from cache. Silent no-op when the
      * query won't hydrate full entities via the default ObjectHydrator
      * (aggregates, specific column selection, explicit custom hydrator) —
-     * same condition getResult() already uses for hydration bypass. See
-     * ADR-0002.
+     * same condition getResult() already uses for hydration bypass. The
+     * cached list is keyed by its root table's generation, so any
+     * unit-of-work write to that table makes it stop matching.
      *
      * Omitted $ttl falls back to the owning EntityManager's configured
      * secondLevelCacheTtl.
@@ -921,7 +922,7 @@ class QueryBuilder {
         // non-null $cacheKey below is this method's single "is this call cache
         // eligible" flag for the rest of the method.
         $cacheKey = $this->isCacheEligible($usesDefaultHydration, $targetClass)
-            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, $this->resolveTableName($targetClass))
+            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, [$this->resolveTableName($targetClass)])
             : null;
 
         if ($cacheKey !== null) {
@@ -1001,8 +1002,7 @@ class QueryBuilder {
      */
     private function tryServeFromCache(string $targetClass, string $cacheKey): ?array
     {
-        $tableName = $this->resolveTableName($targetClass);
-        $cachedIds = $this->secondLevelCache->getCachedIdsWithCrossValidation($cacheKey, $tableName);
+        $cachedIds = $this->secondLevelCache->getCachedIds($cacheKey);
         if ($cachedIds === null) {
             return null;
         }
@@ -1018,8 +1018,7 @@ class QueryBuilder {
 
         $ids = $this->extractIds($results, $targetClass);
         if ($ids !== null) {
-            $tableName = $this->resolveTableName($targetClass);
-            $this->secondLevelCache->storeIdsWithReverseIndex($cacheKey, $ids, $this->secondLevelCacheDefaultTtl, $tableName);
+            $this->secondLevelCache->storeIds($cacheKey, $ids, $this->secondLevelCacheDefaultTtl);
         }
     }
 

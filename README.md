@@ -320,6 +320,19 @@ $em = new EntityManager(
 
 `find()` checks the identity map first, then the L2 cache, then the database. On `flush()`, modified and deleted entity entries are evicted automatically — stale data is never served after a write.
 
+### Collection Cache
+
+Opt a `QueryBuilder` query into caching its matched **id-list** (never row data) in the `secondLevelCache:` pool. A repeat call resolves entities from the identity map or the L2 entity cache.
+
+```php
+$active = $em->createQueryBuilder(User::class)
+    ->where('status = ?', 'active')
+    ->cacheable(ttl: 300)
+    ->getResult();
+```
+
+Invalidation is coarse: every table has a **table generation** counter, bumped once per `flush()` that inserts, updates, deletes or soft-deletes rows in it. A cached list is keyed by its root table's generation, so any such write makes it stop matching, including updates that move a row into or out of the predicate. Writes to other tables keep it a hit. Not covered: changes to joined tables (for now), and writes made through `QueryBuilder` DML or raw SQL.
+
 ### Query Result Cache
 
 Cache raw result sets from `QueryBuilder` queries. Useful for read-heavy queries that don't change often.

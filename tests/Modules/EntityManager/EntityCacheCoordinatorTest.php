@@ -8,6 +8,7 @@ use Articulate\Attributes\Property;
 use Articulate\Modules\Cache\CollectionCacheInterface;
 use Articulate\Modules\EntityManager\EntityCacheCoordinator;
 use Articulate\Modules\EntityManager\EntityUpdate;
+use Articulate\Modules\EntityManager\MergedUpdate;
 use Articulate\Schema\EntityMetadataRegistry;
 use PHPUnit\Framework\TestCase;
 use Psr\Cache\CacheItemInterface;
@@ -41,32 +42,13 @@ class EccOrder {
 }
 
 /**
- * Records every reverse-index/eviction call so tests can assert exactly
- * what EntityCacheCoordinator's flush-time invalidation decided to evict —
- * needed to kill MethodCallRemoval-style mutants an outcome-only assertion
- * can't see, and lets us assert unrelated-table isolation without a real
- * PSR-6 backend.
+ * Records every generation bump so tests can assert exactly which tables
+ * EntityCacheCoordinator's flush-time invalidation bumped, and how often —
+ * needed to kill mutants an outcome-only round trip can't see.
  */
 class EntityCacheCoordinatorSpyCollectionCache implements CollectionCacheInterface {
-    /** @var array<string, list<string>> keyed by "$table:$id" */
-    public array $reverseIndex = [];
-
-    /** @var list<string> */
-    public array $evictedIdListKeys = [];
-
-    /** @var list<array{table: string, id: mixed}> */
-    public array $evictedReverseIndexEntries = [];
-
-    /** @var list<string> */
-    public array $incrementedTableGenerations = [];
-
-    /**
-     * @param list<string> $cacheKeys
-     */
-    public function seedReverseIndex(string $tableName, mixed $id, array $cacheKeys): void
-    {
-        $this->reverseIndex[$tableName . ':' . $id] = $cacheKeys;
-    }
+    /** @var list<list<string>> */
+    public array $incrementCalls = [];
 
     public function getIdList(string $key): ?array
     {
@@ -77,47 +59,14 @@ class EntityCacheCoordinatorSpyCollectionCache implements CollectionCacheInterfa
     {
     }
 
-    public function evictIdList(string $key): void
+    public function getTableGenerations(array $tableNames): ?array
     {
-        $this->evictedIdListKeys[] = $key;
+        return array_fill_keys($tableNames, 1);
     }
 
-    public function addToReverseIndex(string $tableName, mixed $id, string $cacheKey, int $ttl): void
+    public function incrementTableGenerations(array $tableNames): void
     {
-        $this->reverseIndex[$tableName . ':' . $id][] = $cacheKey;
-    }
-
-    public function addIdsToReverseIndex(string $tableName, array $ids, string $cacheKey, int $ttl): void
-    {
-        foreach ($ids as $id) {
-            $this->addToReverseIndex($tableName, $id, $cacheKey, $ttl);
-        }
-    }
-
-    public function getReverseIndexCacheKeys(string $tableName, mixed $id): ?array
-    {
-        return $this->reverseIndex[$tableName . ':' . $id] ?? null;
-    }
-
-    public function evictReverseIndex(string $tableName, mixed $id): void
-    {
-        $this->evictedReverseIndexEntries[] = ['table' => $tableName, 'id' => $id];
-        unset($this->reverseIndex[$tableName . ':' . $id]);
-    }
-
-    public function findMissingReverseIndexIds(string $tableName, array $ids, ?string $cacheKey = null): array
-    {
-        return [];
-    }
-
-    public function getTableGeneration(string $tableName): ?int
-    {
-        return count(array_keys($this->incrementedTableGenerations, $tableName, true));
-    }
-
-    public function incrementTableGeneration(string $tableName): void
-    {
-        $this->incrementedTableGenerations[] = $tableName;
+        $this->incrementCalls[] = $tableNames;
     }
 }
 
@@ -326,184 +275,82 @@ class EntityCacheCoordinatorTest extends TestCase {
         $this->assertSame(6, $rawStoredValue);
     }
 
-    public function testInvalidateSecondLevelCacheEvictsReverseIndexedQueryCacheEntryOnUpdate(): void
-    {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
-        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
-        $collectionCache->seedReverseIndex('ecc_products', 1, ['cache-key-a']);
-        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
-
-        $entity = new EccProduct();
-        $entity->id = 1;
-
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
-
-        $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys);
-    }
-
-    public function testInvalidateSecondLevelCacheEvictsReverseIndexOnDelete(): void
-    {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
-        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
-        $collectionCache->seedReverseIndex('ecc_products', 1, ['cache-key-a']);
-        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
-
-        $entity = new EccProduct();
-        $entity->id = 1;
-
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [], 'deletes' => [$entity], 'softDeletes' => []]);
-
-        $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys);
-    }
-
-    public function testInvalidateSecondLevelCacheEvictsReverseIndexOnSoftDelete(): void
-    {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
-        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
-        $collectionCache->seedReverseIndex('ecc_products', 1, ['cache-key-a']);
-        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
-
-        $entity = new EccProduct();
-        $entity->id = 1;
-
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => [$entity]]);
-
-        $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys);
-    }
-
-    public function testInvalidateSecondLevelCacheEvictsEveryCacheKeyNamedByTheReverseIndex(): void
-    {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
-        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
-        $collectionCache->seedReverseIndex('ecc_products', 1, ['cache-key-a', 'cache-key-b']);
-        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
-
-        $entity = new EccProduct();
-        $entity->id = 1;
-
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
-
-        $this->assertSame(['cache-key-a', 'cache-key-b'], $collectionCache->evictedIdListKeys);
-    }
-
-    public function testInvalidateSecondLevelCacheClearsTheReverseIndexEntryItselfAfterEviction(): void
-    {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
-        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
-        $collectionCache->seedReverseIndex('ecc_products', 1, ['cache-key-a']);
-        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
-
-        $entity = new EccProduct();
-        $entity->id = 1;
-
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
-
-        $this->assertSame([['table' => 'ecc_products', 'id' => 1]], $collectionCache->evictedReverseIndexEntries);
-        $this->assertNull($collectionCache->getReverseIndexCacheKeys('ecc_products', 1));
-    }
-
-    public function testInvalidateSecondLevelCacheIsANoOpWhenNoReverseIndexEntryExists(): void
-    {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
-        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
-        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
-
-        $entity = new EccProduct();
-        $entity->id = 999;
-
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
-
-        $this->assertSame([], $collectionCache->evictedIdListKeys);
-    }
-
-    public function testInvalidateSecondLevelCacheThroughASiblingClassEvictsTheSameReverseIndexEntry(): void
-    {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
-        $registry->getMetadata(EccProductSummary::class);
-        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
-        $collectionCache->seedReverseIndex('ecc_products', 1, ['cache-key-a']);
-        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
-
-        // Write through the sibling class mapping the SAME table/PK.
-        $entity = new EccProductSummary();
-        $entity->id = 1;
-
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
-
-        $this->assertSame(['cache-key-a'], $collectionCache->evictedIdListKeys, 'A write through a context-bounded sibling class must evict the reverse-indexed cache entry of the same table/row.');
-    }
-
-    public function testInvalidateSecondLevelCacheDoesNotEvictAnUnrelatedTablesCacheEntry(): void
-    {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
-        $registry->getMetadata(EccOrder::class);
-        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
-        // Same raw id (1), but on a DIFFERENT table — must not collide.
-        $collectionCache->seedReverseIndex('ecc_orders', 1, ['order-cache-key']);
-        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
-
-        $entity = new EccProduct();
-        $entity->id = 1;
-
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
-
-        $this->assertSame([], $collectionCache->evictedIdListKeys, 'A write to table A must never evict a cached query belonging to an unrelated table B, even with a coincidentally-matching raw id.');
-    }
-
-    public function testInvalidateSecondLevelCacheWithoutCollectionCacheConfiguredIsANoOp(): void
-    {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
-        $coordinator = new EntityCacheCoordinator(null, $registry);
-
-        $entity = new EccProduct();
-        $entity->id = 1;
-
-        // Must not throw when no collection cache was ever configured.
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [], 'softDeletes' => []]);
-        $this->addToAssertionCount(1);
-    }
-
-    public function testInsertsBumpEachInsertedTablesGenerationExactlyOncePerFlush(): void
+    public function testEveryKindOfWriteBumpsItsTablesGeneration(): void
     {
         $registry = new EntityMetadataRegistry();
         $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
         $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
+
+        foreach (['inserts', 'deletes', 'softDeletes'] as $kind) {
+            $changes = ['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => []];
+            $changes[$kind] = [$this->product(1)];
+            $coordinator->invalidateSecondLevelCache($changes);
+        }
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($this->product(1), [])], 'deletes' => [], 'softDeletes' => []]);
+
+        $this->assertSame([['ecc_products'], ['ecc_products'], ['ecc_products'], ['ecc_products']], $collectionCache->incrementCalls);
+    }
+
+    public function testAMergedUpdateBumpsItsOwnTableEvenWithoutABoundEntity(): void
+    {
+        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
+        $coordinator = new EntityCacheCoordinator(null, new EntityMetadataRegistry(), collectionCache: $collectionCache);
 
         $coordinator->invalidateSecondLevelCache([
-            'inserts' => [new EccProduct(), new EccProduct(), new EccProductSummary(), new EccOrder()],
-            'updates' => [],
+            'inserts' => [],
+            'updates' => [new MergedUpdate('ecc_products', null, ['name' => 'x'], 'id = ?', [1])],
             'deletes' => [],
             'softDeletes' => [],
         ]);
 
+        $this->assertSame([['ecc_products']], $collectionCache->incrementCalls);
+    }
+
+    public function testManyWritesToOneTableInOneFlushBumpItOnceInOneBatch(): void
+    {
+        $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
+        $coordinator = new EntityCacheCoordinator(null, new EntityMetadataRegistry(), collectionCache: $collectionCache);
+
+        $summary = new EccProductSummary();
+        $summary->id = 2;
+
+        $coordinator->invalidateSecondLevelCache([
+            'inserts' => [new EccProduct(), new EccProduct(), new EccOrder()],
+            'updates' => [new EntityUpdate($summary, []), new MergedUpdate('ecc_products', null, [], 'id = ?', [3])],
+            'deletes' => [$this->product(4)],
+            'softDeletes' => [$this->product(5)],
+        ]);
+
         $this->assertSame(
-            ['ecc_products', 'ecc_orders'],
-            $collectionCache->incrementedTableGenerations,
-            'Several inserts into one table (through any sibling class) must bump that table once per flush, and only tables that received inserts.'
+            [['ecc_products', 'ecc_orders']],
+            $collectionCache->incrementCalls,
+            'Several writes to one table (through any sibling class) must bump that table once per flush, in a single batched call.'
         );
     }
 
-    public function testAFlushWithoutInsertsBumpsNoTableGeneration(): void
+    public function testAFlushWithoutWritesBumpsNoTableGeneration(): void
     {
-        $registry = new EntityMetadataRegistry();
-        $registry->getMetadata(EccProduct::class);
         $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
-        $coordinator = new EntityCacheCoordinator(null, $registry, collectionCache: $collectionCache);
+        $coordinator = new EntityCacheCoordinator(null, new EntityMetadataRegistry(), collectionCache: $collectionCache);
 
-        $entity = new EccProduct();
-        $entity->id = 1;
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => []]);
 
-        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($entity, [])], 'deletes' => [$entity], 'softDeletes' => []]);
+        $this->assertSame([], $collectionCache->incrementCalls);
+    }
 
-        $this->assertSame([], $collectionCache->incrementedTableGenerations);
+    public function testInvalidateSecondLevelCacheWithoutCollectionCacheConfiguredIsANoOp(): void
+    {
+        $coordinator = new EntityCacheCoordinator(null, new EntityMetadataRegistry());
+
+        $coordinator->invalidateSecondLevelCache(['inserts' => [], 'updates' => [new EntityUpdate($this->product(1), [])], 'deletes' => [], 'softDeletes' => []]);
+        $this->addToAssertionCount(1);
+    }
+
+    private function product(int $id): EccProduct
+    {
+        $product = new EccProduct();
+        $product->id = $id;
+
+        return $product;
     }
 }

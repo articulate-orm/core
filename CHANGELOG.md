@@ -11,16 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second-level cache. The matched id-list is cached; entities resolve from the identity map or the
   per-entity second-level cache, and any unresolvable id discards the whole cached list and re-queries.
   Silent no-op without a configured `secondLevelCache` pool, for `lock()` queries, aggregates,
-  custom hydrators and composite primary keys. See [ADR 0002](https://articulate-orm.github.io/reference/adr-0002-collection-second-level-cache/).
+  custom hydrators and composite primary keys.
 - Second-level cache keys (collection and per-entity) are now namespaced per connection
   (`Connection::getCacheNamespace()`), so connections to different databases can share one pool
   safely. Existing per-entity entries are not reused after upgrading.
-- Exact invalidation: updating, deleting or soft-deleting a row evicts precisely the cached id-lists
-  that contain it, via a reverse index (`l2qidx_` + sha256 of connection namespace, table and
-  type-tagged id). A hit is cross-validated against the reverse index and discarded wholesale if
-  any entry is missing. Rows *inserted* after an id-list was cached still do not appear until it
-  expires.
-- All collection-cache keys (`l2q_`, `l2qidx_`) contain only PSR-6-safe characters (no `:`), so
+- Table-generation invalidation: every table has one generation counter (`l2qgen_` + sha256 of
+  connection namespace and table, randomly seeded). A flush bumps it once per written table, for
+  inserts, entity updates, merged updates, hard deletes and soft deletes. A cached id-list is keyed
+  by its root table's generation, so any such write makes it stop matching, including an update that
+  moves a row into or out of the cached predicate and a merged update across sibling slices. Writes
+  to joined tables, `QueryBuilder` DML and raw SQL do not invalidate yet.
+- All collection-cache keys (`l2q_`, `l2qgen_`) contain only PSR-6-safe characters (no `:`), so
   strict pools such as Symfony Cache accept them.
 - `symfony/cache` added as a dev dependency (PSR-6 key validation in tests).
 - **Changed:** the per-entity second-level cache is enabled only by `secondLevelCache:`. It no longer

@@ -69,7 +69,7 @@ Articulate is a context-bounded ORM for domain-driven PHP applications. PHP 8.4+
 | Database | `src/Modules/Database/` | Schema reader, type mappers per DB, schema comparator (diff engine) |
 | Repository | `src/Modules/Repository/` | AbstractRepository, EntityRepository, criteria pattern |
 | Migrations | `src/Modules/Migrations/` | Schema diff → migration SQL (MySQL & PostgreSQL generators) |
-| Cache | `src/Modules/Cache/` | Collection (query-region) cache storage: id-lists, reverse index, per-table insert generations |
+| Cache | `src/Modules/Cache/` | Collection (query-region) cache storage: id-lists and table generations |
 | Generators | `src/Modules/Generators/` | ID strategies: UUID v4/v7, ULID, AutoIncrement, Serial, Prefixed |
 | Attributes | `src/Attributes/` | All PHP attributes + reflection wrappers (ReflectionEntity, ReflectionProperty, ReflectionRelation) |
 | Schema | `src/Schema/` | EntityMetadata, EntityMetadataRegistry, naming conventions |
@@ -162,15 +162,16 @@ Contract — read before relying on it:
 
 ### Collection Cache
 
-`QueryBuilder::cacheable(?int $ttl)` caches the ordered **id-list** a query matched (never row data) in the second-level cache pool via `CollectionCache` (`src/Modules/Cache/`); a hit resolves entities through the identity map / `SecondLevelCache`. Only applies to default object hydration of an entity with a single-column primary key. Design: ADR-0002.
+`QueryBuilder::cacheable(?int $ttl)` caches the ordered **id-list** a query matched (never row data) in the second-level cache pool via `CollectionCache` (`src/Modules/Cache/`); a hit resolves entities through the identity map / `SecondLevelCache`. Only applies to default object hydration of an entity with a single-column primary key. Invalidation is by **table generation** (terms in `CONTEXT.md`).
 
 Contract — read before relying on it:
-- **Updates/deletes invalidate exactly.** A reverse index (table + id → cache keys) evicts only the lists containing the changed row, at `flush()`.
-- **Inserts invalidate by generation.** Each key folds in a per-table insert-generation counter; a flushed insert bumps it once per table, and old lists age out via TTL.
-- **Root table only.** A change to a joined/filtered-through table does not invalidate the list; neither does an UPDATE that moves a row *into* a cached predicate.
-- **Unit-of-work writes only.** `QueryBuilder` DML and raw SQL neither evict nor bump.
-- **Cost:** one extra `getItem()` per `cacheable()` query for the generation counter.
-- **Fail-open, with caveats.** A backend fault never breaks a query: an unreadable generation skips the cache for that call. But a failed eviction or bump during an outage leaves pre-change lists matchable after recovery until TTL, and eviction/bump run before COMMIT, so a concurrent reader can re-cache pre-commit state.
+- **Any write to the root table invalidates.** Each key folds in the root table's generation. A flush bumps it once per written table, for inserts, entity updates, merged updates, hard deletes and soft deletes — however many rows, through whichever sibling slice. Old lists stop matching and age out via TTL. This covers an UPDATE moving a row into or out of a cached predicate.
+- **Coarse by design.** Any write to a table evicts every list cached against it. Correctness over hit rate; choose which queries are worth caching.
+- **Root table only (for now).** A change to a joined/filtered-through table does not invalidate the list.
+- **Unit-of-work writes only.** `QueryBuilder` DML and raw SQL do not bump generations.
+- **Shared across contexts.** Generations live in the shared pool, so a write in one `EntityManager` invalidates lists every context reads (unlike per-entity eviction).
+- **Cost:** one batched `getItems()` per `cacheable()` query for the generation(s).
+- **Fail-open, with caveats.** A backend fault never breaks a query: an unreadable generation skips the cache for that call. But a failed bump during an outage leaves pre-change lists matchable after recovery until TTL, and the bump runs before COMMIT, so a concurrent reader can re-cache pre-commit state.
 
 ### Metadata Cache
 

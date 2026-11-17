@@ -27,6 +27,6 @@ class NullCollectionCacheTest extends TestCase {
     {
         $cache = new NullCollectionCache();
 
-        $this->assertNull($cache->getTableGeneration('products'));
+        $this->assertNull($cache->getTableGenerations(['products']));
     }
 }

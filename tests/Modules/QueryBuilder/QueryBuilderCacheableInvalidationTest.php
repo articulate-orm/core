@@ -37,7 +37,7 @@ class QbInvItem implements CacheItemInterface {
 
     public function isHit(): bool
     {
-        if ($this->expiration !== null && $this->expiration < QbInvClock::now()) {
+        if ($this->expiration !== null && $this->expiration < time()) {
             $this->isHit = false;
 
             return false;
@@ -66,36 +66,12 @@ class QbInvItem implements CacheItemInterface {
         if ($time === null) {
             $this->expiration = null;
         } elseif (is_int($time)) {
-            $this->expiration = QbInvClock::now() + $time;
+            $this->expiration = time() + $time;
         } else {
-            $this->expiration = (new \DateTime('@' . QbInvClock::now()))->add($time)->getTimestamp();
+            $this->expiration = (new \DateTime('@' . time()))->add($time)->getTimestamp();
         }
 
         return $this;
-    }
-}
-
-/**
- * Controllable clock test double — lets the reverse-index-TTL test assert
- * "still alive at query-TTL + grace minus one second" and "gone past
- * query-TTL + grace" deterministically, without a real sleep().
- */
-class QbInvClock {
-    private static int $offset = 0;
-
-    public static function now(): int
-    {
-        return time() + self::$offset;
-    }
-
-    public static function advance(int $seconds): void
-    {
-        self::$offset += $seconds;
-    }
-
-    public static function reset(): void
-    {
-        self::$offset = 0;
     }
 }
 
@@ -178,7 +154,7 @@ class QbInvProduct {
 /**
  * Sibling entity class mapping the SAME table/PK as QbInvProduct — a write
  * through this class must still invalidate a cached query built through
- * QbInvProduct (context-bounded sibling invalidation, ADR-0002).
+ * QbInvProduct (context-bounded sibling invalidation).
  */
 #[Entity(tableName: 'qb_inv_products')]
 class QbInvProductAdminView {
@@ -218,24 +194,11 @@ class QbInvOrder {
 }
 
 /**
- * Integration coverage for the exact, reverse-indexed invalidation required
- * by ADR-0002 / articulate-orm/core#39: caching a cacheable() query then
- * mutating a matched row must evict exactly that query's cache entry, never
- * a blunt table-wide sweep, and never cross-contaminate an unrelated table.
+ * Integration coverage for table-generation invalidation: any unit-of-work
+ * write to a cached query's root table makes its list stop matching, while
+ * writes to an unrelated table keep it a hit.
  */
 class QueryBuilderCacheableInvalidationTest extends DatabaseTestCase {
-    protected function setUp(): void
-    {
-        parent::setUp();
-        QbInvClock::reset();
-    }
-
-    protected function tearDown(): void
-    {
-        QbInvClock::reset();
-        parent::tearDown();
-    }
-
     #[DataProvider('databaseProvider')]
     public function testUpdatingACachedRowAndFlushingEvictsTheQueryCacheEntry(string $databaseName): void
     {
@@ -399,32 +362,96 @@ class QueryBuilderCacheableInvalidationTest extends DatabaseTestCase {
     }
 
     #[DataProvider('databaseProvider')]
-    public function testReverseIndexEntryOutlivesTheQueryCacheEntryItProtects(string $databaseName): void
+    public function testUpdatingARowSoItNewlyMatchesTheCachedPredicateReturnsItOnTheNextRead(string $databaseName): void
     {
         $connection = $this->getConnection($databaseName);
         $this->createProductTable($connection, $databaseName);
         $this->setCurrentDatabase($connection, $databaseName);
 
         $connection->executeQuery('INSERT INTO qb_inv_products (name, price) VALUES (?, ?)', ['Widget', 10]);
-        $id = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'qb_inv_products_id_seq' : null);
+        $connection->executeQuery('INSERT INTO qb_inv_products (name, price) VALUES (?, ?)', ['Gadget', 500]);
+        $gadgetId = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'qb_inv_products_id_seq' : null);
 
-        $queryTtl = 60;
-        $cache = new QbInvArrayCachePool();
-        $em = new EntityManager($connection, secondLevelCache: $cache);
+        $em = new EntityManager($connection, secondLevelCache: new QbInvArrayCachePool());
 
-        $em->createQueryBuilder(QbInvProduct::class)->orderBy('id')->cacheable($queryTtl)->getResult();
+        $firstResult = $em->createQueryBuilder(QbInvProduct::class)->where('price < ?', 100)->orderBy('id')->cacheable()->getResult();
+        $this->assertSame(['Widget'], array_map(static fn (QbInvProduct $product): string => $product->name, $firstResult));
 
-        $tableName = 'qb_inv_products';
-        $reverseIndexKey = 'l2qidx_' . hash('sha256', $connection->getCacheNamespace() . "\0" . $tableName . ':i:' . $id);
-        $this->assertTrue($cache->hasItem($reverseIndexKey), 'Reverse-index entry must exist right after the query is cached.');
+        $gadget = $em->find(QbInvProduct::class, $gadgetId);
+        $gadget->price = 50;
+        $em->persist($gadget);
+        $em->flush();
+        $em->clear();
 
-        // Advance the controllable clock past the query-cache TTL but still
-        // inside the reverse-index's TTL + grace buffer window.
-        QbInvClock::advance($queryTtl + 1);
+        $secondResult = $em->createQueryBuilder(QbInvProduct::class)->where('price < ?', 100)->orderBy('id')->cacheable()->getResult();
 
-        $this->assertTrue(
-            $cache->hasItem($reverseIndexKey),
-            'Reverse-index entry must still be alive after the query-cache entry\'s own TTL has elapsed — it must outlive what it protects.'
+        $this->assertSame(
+            ['Widget', 'Gadget'],
+            array_map(static fn (QbInvProduct $product): string => $product->name, $secondResult),
+            'An update moving a row into the cached predicate must invalidate the list.'
+        );
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testUpdatingARowSoItNoLongerMatchesTheCachedPredicateDropsItOnTheNextRead(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_inv_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+        $connection->executeQuery('INSERT INTO qb_inv_products (name, price) VALUES (?, ?)', ['Gadget', 20]);
+        $gadgetId = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'qb_inv_products_id_seq' : null);
+
+        $em = new EntityManager($connection, secondLevelCache: new QbInvArrayCachePool());
+
+        $firstResult = $em->createQueryBuilder(QbInvProduct::class)->where('price < ?', 100)->orderBy('id')->cacheable()->getResult();
+        $this->assertCount(2, $firstResult);
+
+        $gadget = $em->find(QbInvProduct::class, $gadgetId);
+        $gadget->price = 500;
+        $em->persist($gadget);
+        $em->flush();
+        $em->clear();
+
+        $secondResult = $em->createQueryBuilder(QbInvProduct::class)->where('price < ?', 100)->orderBy('id')->cacheable()->getResult();
+
+        $this->assertSame(
+            ['Widget'],
+            array_map(static fn (QbInvProduct $product): string => $product->name, $secondResult),
+            'An update moving a row out of the cached predicate must invalidate the list.'
+        );
+    }
+
+    #[DataProvider('databaseProvider')]
+    public function testAMergedUpdateAcrossSiblingSlicesInvalidatesTheCachedQuery(string $databaseName): void
+    {
+        $connection = $this->getConnection($databaseName);
+        $this->createProductTable($connection, $databaseName);
+        $this->setCurrentDatabase($connection, $databaseName);
+
+        $connection->executeQuery('INSERT INTO qb_inv_products (name, price) VALUES (?, ?)', ['Widget', 10]);
+        $connection->executeQuery('INSERT INTO qb_inv_products (name, price) VALUES (?, ?)', ['Gadget', 500]);
+        $gadgetId = (int) $connection->lastInsertId($databaseName === 'pgsql' ? 'qb_inv_products_id_seq' : null);
+
+        $em = new EntityManager($connection, secondLevelCache: new QbInvArrayCachePool());
+
+        $firstResult = $em->createQueryBuilder(QbInvProduct::class)->where('price < ?', 100)->orderBy('id')->cacheable()->getResult();
+        $this->assertCount(1, $firstResult);
+
+        $product = $em->find(QbInvProduct::class, $gadgetId);
+        $product->name = 'Gadget Renamed';
+        $adminView = $em->find(QbInvProductAdminView::class, $gadgetId);
+        $adminView->price = 50;
+        $em->flush();
+        $em->clear();
+
+        $secondResult = $em->createQueryBuilder(QbInvProduct::class)->where('price < ?', 100)->orderBy('id')->cacheable()->getResult();
+
+        $this->assertSame(
+            ['Widget', 'Gadget Renamed'],
+            array_map(static fn (QbInvProduct $product): string => $product->name, $secondResult),
+            'Sibling-slice updates combined into one UPDATE must still invalidate the list.'
         );
     }
 

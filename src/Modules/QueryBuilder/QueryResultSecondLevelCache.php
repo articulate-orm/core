@@ -8,7 +8,7 @@ use Articulate\Modules\Cache\CollectionCacheInterface;
  * Decides hit/miss for a `cacheable()` query and builds/stores its id-list
  * cache key. Entity resolution on a hit is QueryBuilder's job (it alone has
  * access to the managed-entity-store / SecondLevelCache bridge) — this
- * collaborator only owns the collection-cache key/TTL mechanics. See ADR-0002.
+ * collaborator only owns the collection-cache key/TTL mechanics.
  */
 class QueryResultSecondLevelCache {
     private bool $enabled = false;
@@ -63,80 +63,40 @@ class QueryResultSecondLevelCache {
     }
 
     /**
-     * Same as storeIds(), plus a reverse-index entry per id so a later
-     * write to any of those rows can evict exactly this cache entry. See
-     * ADR-0002. No-op when not enabled, matching storeIds().
-     *
-     * @param list<mixed> $ids
-     */
-    public function storeIdsWithReverseIndex(string $key, array $ids, int $defaultTtl, string $tableName): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-
-        $ttl = $this->ttl ?? $defaultTtl;
-        $this->collectionCache->setIdList($key, $ids, $ttl);
-
-        $this->collectionCache->addIdsToReverseIndex($tableName, $ids, $key, $ttl);
-    }
-
-    /**
-     * Read-time cross-validation (ADR-0002, "PSR-6 eviction opacity"
-     * protocol): on a list-cache hit, batch-check that the reverse-index
-     * entry still exists for every id in the hit list. If any is missing
-     * (the backend evicted it early, independent of TTL), the ENTIRE cached
-     * list is discarded — not partially repaired — so the caller requeries,
-     * which naturally rewrites the list + reverse index.
-     *
-     * @return list<mixed>|null null on cache miss, not enabled, or a
-     *                           detected reverse-index inconsistency
-     */
-    public function getCachedIdsWithCrossValidation(string $key, string $tableName): ?array
-    {
-        if (!$this->enabled) {
-            return null;
-        }
-
-        $ids = $this->collectionCache->getIdList($key);
-        if ($ids === null) {
-            return null;
-        }
-
-        $missing = $this->collectionCache->findMissingReverseIndexIds($tableName, $ids, $key);
-        if (!empty($missing)) {
-            return null;
-        }
-
-        return $ids;
-    }
-
-    /**
      * Returns null when the parameters cannot be reduced to an unambiguous
-     * string (unserializable objects, resources), or when the table's
-     * insert-generation counter cannot be read — the caller must then skip
-     * caching rather than risk two different queries sharing a key, or store
-     * a list no later insert could invalidate.
+     * string (unserializable objects, resources), or when any table's
+     * generation cannot be read — the caller must then skip caching rather
+     * than risk two different queries sharing a key, or store a list no
+     * later write could invalidate.
      *
-     * The table's insert-generation counter is folded in as
-     * `tableName:generation`, so an insert into the table makes every
-     * previously built key for it stop matching (ADR-0002, case (b)).
+     * Every table's generation is folded in as `tableName:generation`, so a
+     * unit-of-work write to any of them makes every previously built key
+     * stop matching.
      *
      * @param list<mixed> $params
+     * @param list<string> $tableNames
      */
-    public function buildCacheKey(?string $entityClass, string $sql, array $params, string $tableName): ?string
+    public function buildCacheKey(?string $entityClass, string $sql, array $params, array $tableNames): ?string
     {
         $normalized = $this->normalizeParams($params);
         if ($normalized === null) {
             return null;
         }
 
-        $generation = $this->collectionCache->getTableGeneration($tableName);
-        if ($generation === null) {
+        $tableNames = array_unique($tableNames);
+        sort($tableNames);
+
+        $generations = $this->collectionCache->getTableGenerations($tableNames);
+        if ($generations === null) {
             return null;
         }
 
-        return 'cq_' . hash('sha256', serialize([$this->namespace, $entityClass ?? '', $sql, $normalized, $tableName . ':' . $generation]));
+        $tableGenerations = [];
+        foreach ($tableNames as $tableName) {
+            $tableGenerations[] = $tableName . ':' . $generations[$tableName];
+        }
+
+        return 'cq_' . hash('sha256', serialize([$this->namespace, $entityClass ?? '', $sql, $normalized, ...$tableGenerations]));
     }
 
     /**

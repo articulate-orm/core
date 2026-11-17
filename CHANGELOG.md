@@ -24,7 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Joined tables are dependency tables of a `cacheable()` query: the key folds in the generation of
   every table reached via `join`/`leftJoin`/`rightJoin`/`crossJoin` (alias stripped, self-join counted
   once), read in one batched pool call, so a write to a joined table invalidates the list. Trade-off:
-  more writes now evict a joined list, lowering its hit rate. Subquery tables are not covered yet.
+  more writes now evict a joined list, lowering its hit rate.
+- Subquery tables are dependency tables of a `cacheable()` query: a `QueryBuilder` subquery passed to
+  `whereExists`/`orWhereExists`/`whereIn`/`whereNotIn` contributes its own table, its joins and its
+  nested subqueries (recursively), so a write to any of them invalidates the list. Raw-SQL subqueries
+  are not detected.
 - `cacheable(?int $ttl = null, array $dependsOn = [])`: declare extra dependency tables by name for
   reads the builder can't detect (`whereRaw`, raw join conditions). Merged and deduplicated with
   detected tables (declaring one already detected keeps the same key) and kept across `resetJoins()`.

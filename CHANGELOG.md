@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads the builder can't detect (`whereRaw`, raw join conditions). Merged and deduplicated with
   detected tables (declaring one already detected keeps the same key) and kept across `resetJoins()`.
   Undeclared raw-SQL dependencies are not detected.
+- Mapping (pivot) tables written by the unit of work bump their table generation once per flush:
+  pivot rows deleted along with a removed entity and many-to-many / morph-to-many collection sync
+  (inserts, pivot-data updates, deletes). A cached list joining a mapping table is invalidated.
 - **Fixed:** an entity query with joins now qualifies its default column list with the FROM table or
   alias, so columns shared with a joined table (or a self-join) are no longer ambiguous.
 - All collection-cache keys (`l2q_`, `l2qgen_`) contain only PSR-6-safe characters (no `:`), so

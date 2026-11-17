@@ -39,12 +39,6 @@ class QueryBuilder {
 
     private DependencyTables $dependencyTables;
 
-    // kept apart from the join tables so resetJoins() does not drop them
-    private DependencyTables $subqueryTables;
-
-    // declared via cacheable(dependsOn:); survive resetJoins()
-    private DependencyTables $declaredTables;
-
     private bool $distinct = false;
 
     private ?string $rawSql = null;
@@ -120,8 +114,6 @@ class QueryBuilder {
             $this->sqlCompiler
         );
         $this->dependencyTables = new DependencyTables();
-        $this->subqueryTables = new DependencyTables();
-        $this->declaredTables = new DependencyTables();
         $this->secondLevelCache = new QueryResultSecondLevelCache($collectionCache, $connection->getCacheNamespace());
         $this->cachedEntityResolver = $cachedEntityResolver;
         $this->secondLevelCacheDefaultTtl = $secondLevelCacheDefaultTtl;
@@ -136,22 +128,17 @@ class QueryBuilder {
         return $subBuilder;
     }
 
-    // a where-group's subqueries are read by this query, so the group records them here
     private function createGroupBuilder(): QueryBuilder
     {
         $groupBuilder = $this->createSubQueryBuilder();
-        $groupBuilder->subqueryTables = $this->subqueryTables;
+        $groupBuilder->dependencyTables = $this->dependencyTables->forGroup();
 
         return $groupBuilder;
     }
 
     private function embedSubquery(QueryBuilder $subquery): void
     {
-        if ($subquery->from !== '') {
-            $this->subqueryTables->addJoinTarget($subquery->from);
-        }
-        $this->subqueryTables->merge($subquery->dependencyTables);
-        $this->subqueryTables->merge($subquery->subqueryTables);
+        $this->dependencyTables->addSubquery($subquery->from, $subquery->dependencyTables);
     }
 
     public function withoutFilter(string $name): self
@@ -358,7 +345,7 @@ class QueryBuilder {
     public function resetJoins(): self
     {
         $this->joins = [];
-        $this->dependencyTables->clear();
+        $this->dependencyTables->resetJoins();
 
         return $this;
     }
@@ -391,9 +378,7 @@ class QueryBuilder {
         $this->whereBuilder->reset();
         $this->having = [];
         $this->joins = [];
-        $this->dependencyTables->clear();
-        $this->subqueryTables->clear();
-        $this->declaredTables->clear();
+        $this->dependencyTables->reset();
         $this->orderBy = [];
         $this->groupBy = [];
         $this->limit = null;
@@ -545,7 +530,7 @@ class QueryBuilder {
     public function join(string $table, string $condition, mixed ...$params): self
     {
         $this->assertValidJoinTable($table);
-        $this->dependencyTables->addJoinTarget($table);
+        $this->dependencyTables->addJoin($table);
         $this->joins[] = [
             'sql' => "JOIN {$table} ON {$condition}",
             'params' => $params,
@@ -557,7 +542,7 @@ class QueryBuilder {
     public function leftJoin(string $table, string $condition, mixed ...$params): self
     {
         $this->assertValidJoinTable($table);
-        $this->dependencyTables->addJoinTarget($table);
+        $this->dependencyTables->addJoin($table);
         $this->joins[] = [
             'sql' => "LEFT JOIN {$table} ON {$condition}",
             'params' => $params,
@@ -569,7 +554,7 @@ class QueryBuilder {
     public function rightJoin(string $table, string $condition, mixed ...$params): self
     {
         $this->assertValidJoinTable($table);
-        $this->dependencyTables->addJoinTarget($table);
+        $this->dependencyTables->addJoin($table);
         $this->joins[] = [
             'sql' => "RIGHT JOIN {$table} ON {$condition}",
             'params' => $params,
@@ -581,7 +566,7 @@ class QueryBuilder {
     public function crossJoin(string $table): self
     {
         $this->assertValidJoinTable($table);
-        $this->dependencyTables->addJoinTarget($table);
+        $this->dependencyTables->addJoin($table);
         $this->joins[] = [
             'sql' => "CROSS JOIN {$table}",
             'params' => [],
@@ -714,7 +699,7 @@ class QueryBuilder {
     {
         $this->secondLevelCache->enable($ttl);
         foreach ($dependsOn as $table) {
-            $this->declaredTables->add($table);
+            $this->dependencyTables->addDeclared($table);
         }
 
         return $this;
@@ -975,7 +960,7 @@ class QueryBuilder {
         // non-null $cacheKey below is this method's single "is this call cache
         // eligible" flag for the rest of the method.
         $cacheKey = $this->isCacheEligible($usesDefaultHydration, $targetClass)
-            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, $this->tablesRead($this->resolveTableName($targetClass)))
+            ? $this->secondLevelCache->buildCacheKey($targetClass, $sql, $params, $this->dependencyTables->withRoot($this->resolveTableName($targetClass)))
             : null;
 
         if ($cacheKey !== null) {
@@ -1211,18 +1196,6 @@ class QueryBuilder {
         [$sql, $params] = $this->expandInPlaceholders($sql, $params);
 
         return $this->connection->executeQuery($sql, $params)->rowCount();
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function tablesRead(string $rootTable): array
-    {
-        $tables = clone $this->dependencyTables;
-        $tables->merge($this->subqueryTables);
-        $tables->merge($this->declaredTables);
-
-        return $tables->withRoot($rootTable);
     }
 
     private function resolveTableName(string $entityClass): string

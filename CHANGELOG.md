@@ -20,14 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inserts, entity updates, merged updates, hard deletes and soft deletes. A cached id-list is keyed
   by its root table's generation, so any such write makes it stop matching, including an update that
   moves a row into or out of the cached predicate and a merged update across sibling slices.
-  `QueryBuilder` DML and raw SQL do not invalidate yet.
+  `QueryBuilder` DML and raw SQL do not invalidate yet. Design:
+  [ADR-0003](https://articulate-orm.github.io/reference/adr-0003-collection-cache-table-generation-invalidation/).
 - Joined tables are dependency tables of a `cacheable()` query: the key folds in the generation of
   every table reached via `join`/`leftJoin`/`rightJoin`/`crossJoin` (alias stripped, self-join counted
   once), read in one batched pool call, so a write to a joined table invalidates the list. Trade-off:
   more writes now evict a joined list, lowering its hit rate.
 - Subquery tables are dependency tables of a `cacheable()` query: a `QueryBuilder` subquery passed to
-  `whereExists`/`orWhereExists`/`whereIn`/`whereNotIn` contributes its own table, its joins and its
-  nested subqueries (recursively), so a write to any of them invalidates the list. Raw-SQL subqueries
+  `whereExists`/`orWhereExists`/`whereIn`/`whereNotIn` contributes its own table, its joins, its own
+  `dependsOn` tables and its nested subqueries (recursively), so a write to any of them invalidates the list. Raw-SQL subqueries
   are not detected.
 - `cacheable(?int $ttl = null, array $dependsOn = [])`: declare extra dependency tables by name for
   reads the builder can't detect (`whereRaw`, raw join conditions). Merged and deduplicated with

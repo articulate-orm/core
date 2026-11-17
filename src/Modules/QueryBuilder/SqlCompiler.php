@@ -213,8 +213,7 @@ class SqlCompiler {
             return $columns;
         }
 
-        $parts = preg_split('/\s+/', trim($from));
-        $reference = end($parts);
+        $reference = TableReference::alias($from);
 
         return array_map(static fn (string $column): string => "{$reference}.{$column}", $columns);
     }

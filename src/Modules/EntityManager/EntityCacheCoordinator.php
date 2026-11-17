@@ -178,7 +178,7 @@ class EntityCacheCoordinator {
      * @param array{inserts: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
      * @param list<string> $mappingTables
      */
-    public function bumpWrittenTableGenerations(array $changes, array $mappingTables = []): void
+    public function bumpWrittenTableGenerations(array $changes, array $mappingTables): void
     {
         $tableNames = array_fill_keys($mappingTables, true);
         foreach ([...$changes['inserts'], ...$changes['deletes'], ...$changes['softDeletes']] as $entity) {

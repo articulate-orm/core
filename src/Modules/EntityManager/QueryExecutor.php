@@ -730,8 +730,8 @@ class QueryExecutor {
                 $whereParts[] = "{$typeColumn} = ?";
                 $whereValues[] = $typeValue;
             }
-            $this->writtenMappingTables[$pivotTable] = true;
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 "DELETE FROM {$pivotTable} WHERE " . implode(' AND ', $whereParts),
                 $whereValues
             );
@@ -761,8 +761,8 @@ class QueryExecutor {
                 $values[] = $now;
             }
 
-            $this->writtenMappingTables[$pivotTable] = true;
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 sprintf(
                     'INSERT INTO %s (%s) VALUES (%s)',
                     $pivotTable,
@@ -794,8 +794,8 @@ class QueryExecutor {
                 $whereValues[] = $typeValue;
             }
 
-            $this->writtenMappingTables[$pivotTable] = true;
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 sprintf(
                     'UPDATE %s SET %s WHERE %s',
                     $pivotTable,
@@ -828,8 +828,8 @@ class QueryExecutor {
                 $whereParts[] = "$typeColumn = ?";
                 $whereValues[] = $typeValue;
             }
-            $this->writtenMappingTables[$pivotTable] = true;
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 "DELETE FROM {$pivotTable} WHERE " . implode(' AND ', $whereParts),
                 $whereValues
             );
@@ -854,8 +854,8 @@ class QueryExecutor {
                 $values[] = $now;
             }
 
-            $this->writtenMappingTables[$pivotTable] = true;
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $pivotTable,
                 sprintf(
                     'INSERT INTO %s (%s) VALUES (%s)',
                     $pivotTable,
@@ -903,8 +903,8 @@ class QueryExecutor {
             [, $ownerPkValues] = $this->buildWhereClause($entity);
 
             if ($relation instanceof ReflectionMorphToMany) {
-                $this->writtenMappingTables[$relation->getTableName()] = true;
-                $this->connection->executeQuery(
+                $this->executeMappingTableWrite(
+                    $relation->getTableName(),
                     sprintf(
                         'DELETE FROM %s WHERE %s = ? AND %s = ?',
                         $relation->getTableName(),
@@ -917,12 +917,21 @@ class QueryExecutor {
                 continue;
             }
 
-            $this->writtenMappingTables[$relation->getPivotTableName()] = true;
-            $this->connection->executeQuery(
+            $this->executeMappingTableWrite(
+                $relation->getPivotTableName(),
                 sprintf('DELETE FROM %s WHERE %s = ?', $relation->getPivotTableName(), $relation->getForeignPivotKey()),
                 [$ownerPkValues[0]]
             );
         }
+    }
+
+    /**
+     * @param list<mixed> $params
+     */
+    private function executeMappingTableWrite(string $table, string $sql, array $params): void
+    {
+        $this->writtenMappingTables[$table] = true;
+        $this->connection->executeQuery($sql, $params);
     }
 
     /**

@@ -80,12 +80,4 @@ class ChangeSetExecutor {
             }
         }
     }
-
-    /**
-     * @return list<string>
-     */
-    public function takeWrittenMappingTables(): array
-    {
-        return $this->queryExecutor->takeWrittenMappingTables();
-    }
 }

@@ -284,9 +284,9 @@ class EntityCacheCoordinatorTest extends TestCase {
         foreach (['inserts', 'deletes', 'softDeletes'] as $kind) {
             $changes = ['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => []];
             $changes[$kind] = [$this->product(1)];
-            $coordinator->bumpWrittenTableGenerations($changes);
+            $coordinator->bumpWrittenTableGenerations($changes, []);
         }
-        $coordinator->bumpWrittenTableGenerations(['inserts' => [], 'updates' => [new EntityUpdate($this->product(1), [])], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->bumpWrittenTableGenerations(['inserts' => [], 'updates' => [new EntityUpdate($this->product(1), [])], 'deletes' => [], 'softDeletes' => []], []);
 
         $this->assertSame([['ecc_products'], ['ecc_products'], ['ecc_products'], ['ecc_products']], $collectionCache->incrementCalls);
     }
@@ -301,7 +301,7 @@ class EntityCacheCoordinatorTest extends TestCase {
             'updates' => [new MergedUpdate('ecc_products', null, ['name' => 'x'], 'id = ?', [1])],
             'deletes' => [],
             'softDeletes' => [],
-        ]);
+        ], []);
 
         $this->assertSame([['ecc_products']], $collectionCache->incrementCalls);
     }
@@ -319,7 +319,7 @@ class EntityCacheCoordinatorTest extends TestCase {
             'updates' => [new EntityUpdate($summary, []), new MergedUpdate('ecc_products', null, [], 'id = ?', [3])],
             'deletes' => [$this->product(4)],
             'softDeletes' => [$this->product(5)],
-        ]);
+        ], []);
 
         $this->assertSame(
             [['ecc_products', 'ecc_orders']],
@@ -333,7 +333,7 @@ class EntityCacheCoordinatorTest extends TestCase {
         $collectionCache = new EntityCacheCoordinatorSpyCollectionCache();
         $coordinator = new EntityCacheCoordinator(null, new EntityMetadataRegistry(), collectionCache: $collectionCache);
 
-        $coordinator->bumpWrittenTableGenerations(['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => []]);
+        $coordinator->bumpWrittenTableGenerations(['inserts' => [], 'updates' => [], 'deletes' => [], 'softDeletes' => []], []);
 
         $this->assertSame([], $collectionCache->incrementCalls);
     }

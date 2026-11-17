@@ -134,6 +134,32 @@ class QueryBuilderCacheableSubqueryInvalidationTest extends DatabaseTestCase {
     }
 
     #[DataProvider('databaseProvider')]
+    public function testWritingToATableDeclaredBySubqueryDependsOnInvalidatesTheCachedList(string $databaseName): void
+    {
+        [$em, $connection] = $this->freshContext($databaseName);
+        $postId = $this->insertAuthorWithPost($connection, $databaseName, 'Ann', 1);
+        $commentId = $this->insertComment($connection, $databaseName, $postId, 1);
+        $query = fn (): array => $this->authorNames($em, static function (QueryBuilder $qb): QueryBuilder {
+            $authorsWithApprovedComments = $qb->createSubQueryBuilder()
+                ->select('author_ref')
+                ->from('qb_sub_posts')
+                ->whereRaw('post_id IN (SELECT post_ref FROM qb_sub_comments WHERE approved = 1)')
+                ->cacheable(dependsOn: ['qb_sub_comments']);
+
+            return $qb->whereIn('id', $authorsWithApprovedComments);
+        });
+
+        $this->assertSame(['Ann'], $query());
+
+        $comment = $em->find(QbSubComment::class, $commentId);
+        $comment->approved = 0;
+        $em->flush();
+        $em->clear();
+
+        $this->assertSame([], $query(), 'A table the subquery declares via dependsOn must invalidate the outer list.');
+    }
+
+    #[DataProvider('databaseProvider')]
     public function testResettingTheOuterJoinsKeepsSubqueryTablesAsDependencies(string $databaseName): void
     {
         [$em, $connection] = $this->freshContext($databaseName);

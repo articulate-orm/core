@@ -5,41 +5,72 @@ namespace Articulate\Modules\QueryBuilder;
 /**
  * The tables besides its root that a cacheable query reads from. Each one's
  * generation is folded into the query's cache key, so a unit-of-work write
- * to any of them invalidates the cached id-list.
+ * to any of them invalidates the cached id-list. Kept in buckets so
+ * resetJoins() can drop the join tables alone.
  */
 class DependencyTables {
     /** @var array<string, true> */
-    private array $tables = [];
+    private array $joins = [];
 
-    public function add(string $table): void
+    /** @var array<string, true> */
+    private array $subqueries = [];
+
+    /** @var array<string, true> declared via cacheable(dependsOn:) */
+    private array $declared = [];
+
+    // a where-group's subqueries are read by the outer query, so the group records them there
+    public function forGroup(): self
     {
-        $this->tables[$table] = true;
+        $group = new self();
+        $group->subqueries = &$this->subqueries;
+
+        return $group;
     }
 
-    // join() takes "table alias" as one string; only the real table has a generation
-    public function addJoinTarget(string $tableWithOptionalAlias): void
+    public function addJoin(string $tableReference): void
     {
-        $this->add(preg_split('/\s+/', trim($tableWithOptionalAlias), 2)[0]);
+        $this->joins[TableReference::table($tableReference)] = true;
     }
 
-    public function merge(self $other): void
+    public function addDeclared(string $table): void
     {
-        $this->tables += $other->tables;
+        $this->declared[$table] = true;
     }
 
-    public function clear(): void
+    // everything the subquery reads, its own FROM and dependsOn tables included
+    public function addSubquery(string $fromReference, self $subquery): void
     {
-        $this->tables = [];
+        if ($fromReference !== '') {
+            $this->subqueries[TableReference::table($fromReference)] = true;
+        }
+        $this->subqueries += $subquery->all();
+    }
+
+    public function resetJoins(): void
+    {
+        $this->joins = [];
+    }
+
+    public function reset(): void
+    {
+        $this->joins = [];
+        $this->subqueries = [];
+        $this->declared = [];
     }
 
     /**
-     * @return list<string> the root plus every dependency table, deduplicated and sorted
+     * @return list<string> the root plus every dependency table, each once
      */
     public function withRoot(string $rootTable): array
     {
-        $tables = array_keys([$rootTable => true] + $this->tables);
-        sort($tables);
+        return array_map('strval', array_keys([$rootTable => true] + $this->all()));
+    }
 
-        return $tables;
+    /**
+     * @return array<string, true>
+     */
+    private function all(): array
+    {
+        return $this->joins + $this->subqueries + $this->declared;
     }
 }

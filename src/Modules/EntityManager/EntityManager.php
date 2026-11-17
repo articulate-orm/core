@@ -50,6 +50,8 @@ class EntityManager {
 
     private EntityRefreshService $refreshService;
 
+    private QueryExecutor $queryExecutor;
+
     public function __construct(
         Connection $connection,
         ?ChangeTrackingStrategy $changeTrackingStrategy = null,
@@ -79,7 +81,7 @@ class EntityManager {
         // Initialize change aggregator and query executor
         $this->updateConflictResolutionStrategy = $updateConflictResolutionStrategy ?? new MergeUpdateConflictResolutionStrategy();
         $this->changeAggregator = new ChangeAggregator($this->metadataRegistry, $this->updateConflictResolutionStrategy, $logger);
-        $queryExecutor = $queryExecutor ?? new QueryExecutor($this->connection, $this->generatorRegistry);
+        $this->queryExecutor = $queryExecutor ?? new QueryExecutor($this->connection, $this->generatorRegistry);
 
         $this->unitOfWorkRegistry = new UnitOfWorkRegistry(
             $changeTrackingStrategy,
@@ -109,7 +111,7 @@ class EntityManager {
             : new NullCollectionCache();
         $this->cacheCoordinator = new EntityCacheCoordinator($resultCache, $this->metadataRegistry, $secondLevelCache, $secondLevelCacheTtl, $this->connection->getCacheNamespace(), $collectionCache, $typeRegistry);
         $this->dependencySorter = new EntityDependencySorter($this->metadataRegistry);
-        $this->changeSetExecutor = new ChangeSetExecutor($queryExecutor, $this->metadataRegistry, $this->dependencySorter);
+        $this->changeSetExecutor = new ChangeSetExecutor($this->queryExecutor, $this->metadataRegistry, $this->dependencySorter);
         $this->readService = new EntityReadService(
             $this->connection,
             $this->hydrator,
@@ -154,6 +156,8 @@ class EntityManager {
         /** @var list<VersionedRowWriteHandle> $versionedRowWrites */
         $versionedRowWrites = [];
         $writtenMappingTables = [];
+        // Drop mapping tables recorded by an earlier failed flush or outside any flush.
+        $this->queryExecutor->takeWrittenMappingTables();
 
         try {
             $unitOfWorks = $this->unitOfWorkRegistry->all();
@@ -166,7 +170,7 @@ class EntityManager {
             $aggregatedChanges = $this->changeAggregator->aggregateChanges($unitOfWorks);
             $versionedRowWrites = $this->changeSetExecutor->execute($aggregatedChanges);
             $this->changeSetExecutor->syncManagedManyToMany($unitOfWorks);
-            $writtenMappingTables = $this->changeSetExecutor->takeWrittenMappingTables();
+            $writtenMappingTables = $this->queryExecutor->takeWrittenMappingTables();
             $this->cacheCoordinator->invalidateSecondLevelCache($aggregatedChanges);
             $this->cacheCoordinator->incrementQueryCacheGeneration();
 
@@ -191,9 +195,6 @@ class EntityManager {
             foreach ($versionedRowWrites as $write) {
                 $write->abandon();
             }
-
-            // Rolled back, so nothing to bump; discard so the next flush starts clean.
-            $this->changeSetExecutor->takeWrittenMappingTables();
 
             if ($managingTransaction) {
                 $this->connection->rollbackTransaction();

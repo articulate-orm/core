@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every table reached via `join`/`leftJoin`/`rightJoin`/`crossJoin` (alias stripped, self-join counted
   once), read in one batched pool call, so a write to a joined table invalidates the list. Trade-off:
   more writes now evict a joined list, lowering its hit rate. Subquery tables are not covered yet.
+- Mapping (pivot) tables written by the unit of work bump their table generation once per flush:
+  pivot rows deleted along with a removed entity and many-to-many / morph-to-many collection sync
+  (inserts, pivot-data updates, deletes). A cached list joining a mapping table is invalidated.
 - **Fixed:** an entity query with joins now qualifies its default column list with the FROM table or
   alias, so columns shared with a joined table (or a self-join) are no longer ambiguous.
 - All collection-cache keys (`l2q_`, `l2qgen_`) contain only PSR-6-safe characters (no `:`), so

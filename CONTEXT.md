@@ -33,7 +33,7 @@ see ADRs under https://articulate-orm.github.io/reference/ (source: `articulate-
   through a join or a subquery — or that the caller declares as one. Its rows shape *which*
   root ids match, but none of its ids appear in the cached list.
 - **Table generation**: A counter, one per database table, bumped once per flush by any insert,
-  update or delete to that table. A cached list is keyed by the generation of its root table and
+  update or delete to that table (mapping tables included, when the unit of work writes pivot rows). A cached list is keyed by the generation of its root table and
   of every dependency table, so any write to any table the query read makes the list stop
   matching — it ages out via TTL. Coarse by design: correctness over hit rate.
   Avoid: reverse index, insert generation, per-table generation counter (superseded mechanisms).

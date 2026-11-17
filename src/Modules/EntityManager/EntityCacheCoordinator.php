@@ -169,15 +169,18 @@ class EntityCacheCoordinator {
      * Every table the flush wrote gets exactly one generation bump, however
      * many rows went into it and through however many sibling classes. A
      * merged update has no single bound entity, so its own table is used.
+     * Mapping tables are not part of the change set, so the caller passes the
+     * ones the flush actually wrote.
      * Called only once the written rows are visible (after COMMIT when flush()
      * owns the transaction), so a concurrent reader cannot re-cache pre-commit
      * state under the new generation.
      *
      * @param array{inserts: object[], updates: list<EntityUpdate|MergedUpdate>, deletes: object[], softDeletes: object[]} $changes
+     * @param list<string> $mappingTables
      */
-    public function bumpWrittenTableGenerations(array $changes): void
+    public function bumpWrittenTableGenerations(array $changes, array $mappingTables = []): void
     {
-        $tableNames = [];
+        $tableNames = array_fill_keys($mappingTables, true);
         foreach ([...$changes['inserts'], ...$changes['deletes'], ...$changes['softDeletes']] as $entity) {
             $tableNames[$this->entityTableName($entity)] = true;
         }

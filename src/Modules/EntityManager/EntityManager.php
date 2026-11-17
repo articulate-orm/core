@@ -153,6 +153,7 @@ class EntityManager {
 
         /** @var list<VersionedRowWriteHandle> $versionedRowWrites */
         $versionedRowWrites = [];
+        $writtenMappingTables = [];
 
         try {
             $unitOfWorks = $this->unitOfWorkRegistry->all();
@@ -165,6 +166,7 @@ class EntityManager {
             $aggregatedChanges = $this->changeAggregator->aggregateChanges($unitOfWorks);
             $versionedRowWrites = $this->changeSetExecutor->execute($aggregatedChanges);
             $this->changeSetExecutor->syncManagedManyToMany($unitOfWorks);
+            $writtenMappingTables = $this->changeSetExecutor->takeWrittenMappingTables();
             $this->cacheCoordinator->invalidateSecondLevelCache($aggregatedChanges);
             $this->cacheCoordinator->incrementQueryCacheGeneration();
 
@@ -190,6 +192,9 @@ class EntityManager {
                 $write->abandon();
             }
 
+            // Rolled back, so nothing to bump; discard so the next flush starts clean.
+            $this->changeSetExecutor->takeWrittenMappingTables();
+
             if ($managingTransaction) {
                 $this->connection->rollbackTransaction();
             }
@@ -199,7 +204,7 @@ class EntityManager {
 
         // Outside the try: the rows are committed (or handed back to the caller's
         // transaction), so a bump must never trigger a rollback.
-        $this->cacheCoordinator->bumpWrittenTableGenerations($aggregatedChanges);
+        $this->cacheCoordinator->bumpWrittenTableGenerations($aggregatedChanges, $writtenMappingTables);
     }
 
     public function clear(): void

@@ -692,14 +692,20 @@ class QueryBuilder {
      * secondLevelCacheTtl. $dependsOn declares extra dependency tables by
      * name for reads the builder can't detect (whereRaw, raw join
      * conditions); undeclared raw-SQL dependencies are not invalidated on.
+     * $name gives the list a counter of its own, so
+     * EntityManager::invalidateCacheNames() can drop it (and every other list
+     * sharing the name) on demand.
      *
      * @param list<string> $dependsOn
      */
-    public function cacheable(?int $ttl = null, array $dependsOn = []): self
+    public function cacheable(?int $ttl = null, array $dependsOn = [], ?string $name = null): self
     {
         $this->secondLevelCache->enable($ttl);
         foreach ($dependsOn as $table) {
             $this->dependencyTables->addDeclared($table);
+        }
+        if ($name !== null) {
+            $this->dependencyTables->addDeclared(CollectionCacheInterface::NAME_PREFIX . $name);
         }
 
         return $this;
@@ -1177,7 +1183,7 @@ class QueryBuilder {
         $dmlCommand = $this->dmlHandler->getCommand();
 
         if ($dmlCommand !== null) {
-            return $this->dmlHandler->execute(
+            $result = $this->dmlHandler->execute(
                 $this->connection,
                 $this->sqlCompiler,
                 $this->getFilteredWhere(),
@@ -1185,6 +1191,10 @@ class QueryBuilder {
                 $this->lockForUpdate,
                 fn (string $sql, array $params) => $this->expandInPlaceholders($sql, $params)
             );
+            // ponytail: bumps before a caller-owned COMMIT, same window as flush() inside transactional()
+            $this->secondLevelCache->invalidateTables([TableReference::table($this->from)]);
+
+            return $result;
         }
 
         if ($this->lockForUpdate && !$this->connection->inTransaction()) {

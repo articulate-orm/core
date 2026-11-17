@@ -33,6 +33,14 @@ class QueryResultSecondLevelCache {
         $this->ttl = null;
     }
 
+    /**
+     * @param list<string> $tableNames
+     */
+    public function invalidateTables(array $tableNames): void
+    {
+        $this->collectionCache->incrementTableGenerations($tableNames);
+    }
+
     public function isEnabled(): bool
     {
         return $this->enabled;

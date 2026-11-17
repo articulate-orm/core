@@ -4,6 +4,7 @@ namespace Articulate\Modules\EntityManager;
 
 use Articulate\Connection;
 use Articulate\Modules\Cache\CollectionCache;
+use Articulate\Modules\Cache\CollectionCacheInterface;
 use Articulate\Modules\Cache\NullCollectionCache;
 use Articulate\Modules\Generators\GeneratorRegistry;
 use Articulate\Modules\QueryBuilder\Filter\FilterCollection;
@@ -362,6 +363,26 @@ class EntityManager {
     public function getFilters(): FilterCollection
     {
         return $this->filters;
+    }
+
+    /**
+     * Invalidates every cacheable() id-list that read any of these tables,
+     * for writes the unit of work never sees (raw SQL, another process).
+     * Shared across contexts, like flush-time invalidation.
+     */
+    public function invalidateTables(string ...$tables): void
+    {
+        $this->cacheCoordinator->getCollectionCache()->incrementTableGenerations(array_values($tables));
+    }
+
+    /**
+     * Invalidates every cacheable() id-list cached under one of these names.
+     */
+    public function invalidateCacheNames(string ...$names): void
+    {
+        $this->cacheCoordinator->getCollectionCache()->incrementTableGenerations(
+            array_map(static fn (string $name): string => CollectionCacheInterface::NAME_PREFIX . $name, array_values($names))
+        );
     }
 
     public function createQueryBuilder(?string $entityClass = null): QueryBuilder

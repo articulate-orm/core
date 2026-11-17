@@ -331,7 +331,7 @@ $active = $em->createQueryBuilder(User::class)
     ->getResult();
 ```
 
-Invalidation is coarse: every table has a **table generation** counter, bumped once per `flush()` that inserts, updates, deletes or soft-deletes rows in it. A cached list is keyed by its root table's generation, so any such write makes it stop matching, including updates that move a row into or out of the predicate. Joined tables (`join`, `leftJoin`, `rightJoin`, `crossJoin`, aliased or not) count too: their generations are part of the key, so a write to a joined table also invalidates. Mapping (pivot) tables are written tables too: pivot rows `flush()` deletes along with a removed entity, or writes while syncing a many-to-many collection, bump the mapping table's generation, so a list joining it is invalidated. The cost is hit rate: a query joined against a frequently written table misses after each of those writes. Writes to tables the query does not read keep it a hit. All generations are read in one batched pool call; if any is unreadable, the query runs uncached. Tables read through a `QueryBuilder` subquery passed to `whereExists`, `orWhereExists`, `whereIn` or `whereNotIn` count too, recursively: the subquery's own table, its joins, its `dependsOn` tables and its nested subqueries. Not covered: subqueries written as raw SQL strings, and writes made through `QueryBuilder` DML or raw SQL.
+Invalidation is coarse: every table has a **table generation** counter, bumped once per `flush()` that inserts, updates, deletes or soft-deletes rows in it. A cached list is keyed by its root table's generation, so any such write makes it stop matching, including updates that move a row into or out of the predicate. Joined tables (`join`, `leftJoin`, `rightJoin`, `crossJoin`, aliased or not) count too: their generations are part of the key, so a write to a joined table also invalidates. Mapping (pivot) tables are written tables too: pivot rows `flush()` deletes along with a removed entity, or writes while syncing a many-to-many collection, bump the mapping table's generation, so a list joining it is invalidated. The cost is hit rate: a query joined against a frequently written table misses after each of those writes. Writes to tables the query does not read keep it a hit. All generations are read in one batched pool call; if any is unreadable, the query runs uncached. Tables read through a `QueryBuilder` subquery passed to `whereExists`, `orWhereExists`, `whereIn` or `whereNotIn` count too, recursively: the subquery's own table, its joins, its `dependsOn` tables and its nested subqueries. `QueryBuilder` `insert()`/`update()`/`delete()` bump their target table too. Not covered: subqueries written as raw SQL strings, and writes made through raw SQL. Schema-qualified names (`shop.products`) share the bare table's counter, so they are invalidated like `products`.
 
 Tables a query reaches only through raw SQL (`whereRaw`, a raw join condition) are not detected, so writes to them do not invalidate the list. Declare them with `dependsOn:`; they are merged with the detected tables:
 
@@ -340,6 +340,20 @@ $authors = $em->createQueryBuilder(Author::class)
     ->whereRaw('EXISTS (SELECT 1 FROM posts WHERE posts.author_id = authors.id)')
     ->cacheable(ttl: 300, dependsOn: ['posts'])
     ->getResult();
+```
+
+For writes the ORM never sees (raw SQL, another service), invalidate by hand. Name a list to drop it on demand:
+
+```php
+$em->invalidateTables('products', 'product_stock');
+
+$top = $em->createQueryBuilder(Product::class)
+    ->orderBy('sales', 'DESC')
+    ->limit(10)
+    ->cacheable(ttl: 300, name: 'top-products')
+    ->getResult();
+
+$em->invalidateCacheNames('top-products');
 ```
 
 The bump happens after `flush()` commits its own transaction, so concurrent readers never re-cache pre-commit rows under the new generation, and a flush that fails bumps nothing. If you call `flush()` inside your own transaction, the bump happens when `flush()` returns, before your COMMIT, so a reader in that window can still cache rows that are not committed yet.

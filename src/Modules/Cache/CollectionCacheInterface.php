@@ -13,6 +13,13 @@ interface CollectionCacheInterface {
     public const DEFAULT_TTL = 3600;
 
     /**
+     * A cacheable(name:) query gets a generation counter of its own under this
+     * prefix. ':' is not legal in a table identifier, so it never collides
+     * with a real table's counter.
+     */
+    public const NAME_PREFIX = 'name:';
+
+    /**
      * @return list<mixed>|null null on cache miss
      */
     public function getIdList(string $key): ?array;

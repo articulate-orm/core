@@ -341,6 +341,17 @@ class CollectionCacheTest extends TestCase {
         );
     }
 
+    public function testASchemaQualifiedNameSharesTheBareTablesCounter(): void
+    {
+        $cache = new CollectionCache(new ArrayCachePool());
+        $before = $cache->getTableGenerations(['shop.products', 'products']);
+        $this->assertSame($before['products'], $before['shop.products']);
+
+        $cache->incrementTableGenerations(['products']);
+
+        $this->assertSame($before['shop.products'] + 1, $cache->getTableGenerations(['shop.products'])['shop.products']);
+    }
+
     public function testADuplicatedTableIsIncrementedOnce(): void
     {
         $cache = new CollectionCache(new ArrayCachePool());

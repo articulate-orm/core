@@ -56,26 +56,29 @@ class CollectionCache implements CollectionCacheInterface {
         }
 
         try {
-            $keyToTable = [];
+            // "shop.products" and "products" share one counter, so several names can map to a key
+            $keyToTables = [];
             foreach ($tableNames as $tableName) {
-                $keyToTable[$this->tableGenerationKey($tableName)] = $tableName;
+                $keyToTables[$this->tableGenerationKey($tableName)][] = $tableName;
             }
 
             $generations = [];
-            foreach ($this->pool->getItems(array_keys($keyToTable)) as $key => $item) {
+            $read = 0;
+            foreach ($this->pool->getItems(array_keys($keyToTables)) as $key => $item) {
                 if ($item->isHit()) {
-                    $generations[$keyToTable[$key]] = (int) $item->get();
-
-                    continue;
+                    $generation = (int) $item->get();
+                } else {
+                    $generation = $this->seedGeneration();
+                    $item->set($generation);
+                    $this->pool->save($item);
                 }
-
-                $generation = $this->seedGeneration();
-                $item->set($generation);
-                $this->pool->save($item);
-                $generations[$keyToTable[$key]] = $generation;
+                foreach ($keyToTables[$key] as $tableName) {
+                    $generations[$tableName] = $generation;
+                }
+                $read++;
             }
 
-            return count($generations) === count($keyToTable) ? $generations : null;
+            return $read === count($keyToTables) ? $generations : null;
         } catch (\Throwable) {
             return null;
         }
@@ -109,8 +112,16 @@ class CollectionCache implements CollectionCacheInterface {
         return random_int(1, 1 << 53);
     }
 
+    /**
+     * The unit of work bumps bare entity table names, while from()/join()/dependsOn
+     * may name a table schema-qualified ("shop.products"). Dropping the schema
+     * makes both land on one counter. Same-named tables in different schemas
+     * then share a counter: over-invalidation, never a stale list.
+     */
     private function tableGenerationKey(string $tableName): string
     {
+        $tableName = preg_replace('/^[A-Za-z_]\w*\.(?=[A-Za-z_]\w*$)/', '', $tableName) ?? $tableName;
+
         return self::TABLE_GENERATION_PREFIX . hash('sha256', $this->namespace . "\0" . $tableName);
     }
 }
